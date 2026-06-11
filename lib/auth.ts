@@ -20,12 +20,6 @@ type CustomerAuthRow = {
   name: string;
 };
 
-const authSecret = process.env.AUTH_SECRET;
-
-if (!authSecret) {
-  throw new Error("AUTH_SECRET is not configured.");
-}
-
 export async function findCustomerByCode(
   code: string,
 ): Promise<CustomerSession | null> {
@@ -108,9 +102,18 @@ export function readCustomerSession(
 }
 
 function sign(payload: string): string {
-  return createHmac("sha256", authSecret!)
+  return createHmac("sha256", getAuthSecret())
     .update(payload)
     .digest("base64url");
+}
+
+function getAuthSecret(): string {
+  const authSecret = process.env.AUTH_SECRET;
+  if (!authSecret) {
+    throw new Error("AUTH_SECRET is not configured.");
+  }
+
+  return authSecret;
 }
 
 function verify(payload: string, signature: string): boolean {
