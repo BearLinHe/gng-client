@@ -1,0 +1,2837 @@
+"use client";
+
+import Image from "next/image";
+import {
+  AlertCircle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  CalendarDays,
+  ChevronRight,
+  Copy,
+  Eye,
+  EyeOff,
+  GripVertical,
+  LoaderCircle,
+  LogOut,
+  RefreshCw,
+  RotateCcw,
+  Search,
+  Settings,
+  UserRound,
+} from "lucide-react";
+import {
+  flexRender,
+  getCoreRowModel,
+  getSortedRowModel,
+  useReactTable,
+  type ColumnDef,
+  type ColumnSizingState,
+  type SortingFn,
+  type SortingState,
+} from "@tanstack/react-table";
+import {
+  Fragment,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type FocusEvent,
+  type FormEvent,
+  type MouseEvent,
+  type PointerEvent,
+  type ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
+
+type CustomerOption = {
+  id: string;
+  code: string | null;
+  name: string;
+  role: "customer" | "admin";
+};
+
+type ContainerRecord = {
+  sourceOrderId: string;
+  containerNumber: string;
+  customerId: string | null;
+  customerCode: string | null;
+  customerName: string;
+  orderDate: string | null;
+  etaDate: string | null;
+  lfdDate: string | null;
+  pickupDate: string | null;
+  operationMode: string | null;
+  operationModeLabel: string;
+  destination: string | null;
+  warehousePoints: string | null;
+  appointments: DeliveryAppointment[];
+};
+
+type TableContainerRecord = ContainerRecord & {
+  rowId: string;
+};
+
+type DateFilterField = "orderDate" | "etaDate" | "lfdDate" | "pickupDate";
+type EditableDateField = DateFilterField;
+type EditableAppointmentField =
+  | "warehousePoint"
+  | "isaNumber"
+  | "deliveryTime"
+  | "palletCount";
+type PickupStatus = "all" | "pending" | "picked";
+
+type DeliveryAppointment = {
+  sourceAppointmentId: string;
+  warehousePoint: string;
+  isaNumber: string | null;
+  deliveryTime: string | null;
+  palletCount: number | null;
+};
+
+type ContainerPayload = {
+  containers: ContainerRecord[];
+  total: number;
+  allContainers: number;
+  involvedCustomers: number;
+  pendingPickup: number;
+  pickedUp: number;
+  page: number;
+  pageSize: number;
+};
+
+type LoadState = "idle" | "loading" | "error";
+type RowDragSession = {
+  sourceRowId: string;
+  targetRowId: string | null;
+  rafId: number | null;
+};
+const PAGE_SIZE = 100;
+const MAX_INLINE_LOCATIONS = 3;
+
+export default function ContainerDashboard() {
+  const [customer, setCustomer] = useState<CustomerOption | null>(null);
+  const [containers, setContainers] = useState<TableContainerRecord[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [allContainers, setAllContainers] = useState(0);
+  const [pendingPickup, setPendingPickup] = useState(0);
+  const [pickedUp, setPickedUp] = useState(0);
+  const [pickupStatus, setPickupStatus] = useState<PickupStatus>("all");
+  const [selectedOperationMode, setSelectedOperationMode] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+  const [dateField, setDateField] = useState<DateFilterField>("orderDate");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [loginCode, setLoginCode] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
+  const [showPasswordForm, setShowPasswordForm] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [passwordMessage, setPasswordMessage] = useState("");
+  const [passwordState, setPasswordState] = useState<LoadState>("idle");
+  const [authChecked, setAuthChecked] = useState(false);
+  const [loginState, setLoginState] = useState<LoadState>("idle");
+  const [page, setPage] = useState(1);
+  const [refreshTick, setRefreshTick] = useState(0);
+  const [mockLongTable, setMockLongTable] = useState(false);
+  const [expandedContainers, setExpandedContainers] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
+  const [draggedRowId, setDraggedRowId] = useState<string | null>(null);
+  const [dragOverRowId, setDragOverRowId] = useState<string | null>(null);
+  const [copiedContainer, setCopiedContainer] = useState<string | null>(null);
+  const [loadState, setLoadState] = useState<LoadState>("idle");
+  const [error, setError] = useState("");
+  const [editingDateCell, setEditingDateCell] = useState<{
+    rowId: string;
+    field: EditableDateField;
+  } | null>(null);
+  const [dateDraft, setDateDraft] = useState("");
+  const [savingDateCells, setSavingDateCells] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [dateCellErrors, setDateCellErrors] = useState<Record<string, string>>(
+    {},
+  );
+  const [editingAppointmentCell, setEditingAppointmentCell] = useState<{
+    rowId: string;
+    sourceAppointmentId: string;
+    field: EditableAppointmentField;
+  } | null>(null);
+  const [appointmentDraft, setAppointmentDraft] = useState("");
+  const [savingAppointmentCells, setSavingAppointmentCells] = useState<
+    Set<string>
+  >(() => new Set());
+  const [appointmentCellErrors, setAppointmentCellErrors] = useState<
+    Record<string, string>
+  >({});
+  const savingDateKeysRef = useRef(new Set<string>());
+  const savingDateTimeoutsRef = useRef(new Map<string, number>());
+  const savingAppointmentKeysRef = useRef(new Set<string>());
+  const savingAppointmentTimeoutsRef = useRef(new Map<string, number>());
+  const tableWrapRef = useRef<HTMLDivElement | null>(null);
+  const rowDragSessionRef = useRef<RowDragSession | null>(null);
+  const rowDragCleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    const dateTimeouts = savingDateTimeoutsRef.current;
+    const appointmentTimeouts = savingAppointmentTimeoutsRef.current;
+
+    return () => {
+      rowDragCleanupRef.current?.();
+      const session = rowDragSessionRef.current;
+      if (session?.rafId !== null && session?.rafId !== undefined) {
+        window.cancelAnimationFrame(session.rafId);
+      }
+      for (const timeoutId of dateTimeouts.values()) {
+        window.clearTimeout(timeoutId);
+      }
+      for (const timeoutId of appointmentTimeouts.values()) {
+        window.clearTimeout(timeoutId);
+      }
+      document.body.classList.remove("rowDragActive");
+    };
+  }, []);
+
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production") return;
+    setMockLongTable(
+      new URLSearchParams(window.location.search).get("mockTable") === "long",
+    );
+  }, [mockLongTable]);
+
+  useEffect(() => {
+    if (!mockLongTable) return;
+
+    setCustomer({
+      id: "mock-customer",
+      code: "TEST",
+      name: "Long Text Layout Test",
+      role: "admin",
+    });
+    setAuthChecked(true);
+  }, [mockLongTable]);
+
+  useEffect(() => {
+    let ignore = false;
+
+    if (mockLongTable) return;
+
+    async function loadSession() {
+      const response = await fetch("/api/auth/me");
+      if (!response.ok) {
+        if (!ignore) {
+          setCustomer(null);
+          setAuthChecked(true);
+        }
+        return;
+      }
+
+      const payload = (await response.json()) as { customer: CustomerOption };
+      if (!ignore) {
+        setCustomer(payload.customer);
+        setAuthChecked(true);
+      }
+    }
+
+    loadSession().catch(() => {
+      if (!ignore) {
+        setCustomer(null);
+        setAuthChecked(true);
+      }
+    });
+
+    return () => {
+      ignore = true;
+    };
+  }, [mockLongTable]);
+
+  useEffect(() => {
+    const handle = window.setTimeout(() => setSearch(searchInput.trim()), 250);
+    return () => window.clearTimeout(handle);
+  }, [searchInput]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [dateField, dateFrom, dateTo, pickupStatus, selectedOperationMode, search]);
+
+  useEffect(() => {
+    let ignore = false;
+    const params = new URLSearchParams();
+
+    if (!customer) return;
+
+    if (mockLongTable) {
+      const payload = getMockContainerPayload({
+        operationMode: selectedOperationMode,
+        search,
+        dateField,
+        dateFrom,
+        dateTo,
+        pickupStatus,
+        page,
+        pageSize: PAGE_SIZE,
+      });
+
+      setContainers(payload.containers);
+      setTotalCount(payload.total);
+      setAllContainers(payload.allContainers);
+      setPendingPickup(payload.pendingPickup);
+      setPickedUp(payload.pickedUp);
+      setExpandedContainers(new Set());
+      setSorting([]);
+      setDraggedRowId(null);
+      setDragOverRowId(null);
+      setEditingDateCell(null);
+      setDateCellErrors({});
+      clearAllDateSaving();
+      setEditingAppointmentCell(null);
+      setAppointmentCellErrors({});
+      clearAllAppointmentSaving();
+      setLoadState("idle");
+      setError("");
+      return;
+    }
+
+    if (selectedOperationMode) {
+      params.set("operationMode", selectedOperationMode);
+    }
+    if (search) params.set("search", search);
+    if (dateFrom || dateTo) {
+      params.set("dateField", dateField);
+      if (dateFrom) params.set("dateFrom", dateFrom);
+      if (dateTo) params.set("dateTo", dateTo);
+    }
+    if (pickupStatus !== "all") params.set("pickupStatus", pickupStatus);
+    params.set("page", String(page));
+    params.set("pageSize", String(PAGE_SIZE));
+
+    async function loadContainers() {
+      setLoadState("loading");
+      setError("");
+
+      const response = await fetch(`/api/containers?${params.toString()}`);
+      if (!response.ok) throw new Error("柜号数据读取失败");
+
+      const payload = (await response.json()) as ContainerPayload;
+      if (!ignore) {
+        setContainers(
+          payload.containers.map((container, index) => ({
+            ...container,
+            rowId: createRowId(container, index),
+          })),
+        );
+        setTotalCount(payload.total);
+        setAllContainers(payload.allContainers);
+        setPendingPickup(payload.pendingPickup);
+        setPickedUp(payload.pickedUp);
+        setExpandedContainers(new Set());
+        setSorting([]);
+        setDraggedRowId(null);
+        setDragOverRowId(null);
+        setEditingDateCell(null);
+        setDateCellErrors({});
+        clearAllDateSaving();
+        setEditingAppointmentCell(null);
+        setAppointmentCellErrors({});
+        clearAllAppointmentSaving();
+        setLoadState("idle");
+      }
+    }
+
+    loadContainers().catch(() => {
+      if (!ignore) {
+        setLoadState("error");
+        setError("柜号数据读取失败，请重新登录或稍后再试。");
+      }
+    });
+
+    return () => {
+      ignore = true;
+    };
+  }, [
+    customer,
+    dateField,
+    dateFrom,
+    dateTo,
+    mockLongTable,
+    pickupStatus,
+    refreshTick,
+    selectedOperationMode,
+    search,
+    page,
+  ]);
+
+  const pageStats = useMemo(() => {
+    const uniqueContainers = new Set(
+      containers.map((container) => container.containerNumber),
+    ).size;
+
+    return { uniqueContainers };
+  }, [containers]);
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const pageStart = totalCount === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const pageEnd = Math.min(page * PAGE_SIZE, totalCount);
+  const isAdmin = customer?.role === "admin";
+  const hasActiveFilters =
+    Boolean(searchInput.trim() || search || selectedOperationMode || dateFrom || dateTo) ||
+    pickupStatus !== "all";
+
+  function resetFilters() {
+    setSearchInput("");
+    setSearch("");
+    setSelectedOperationMode("");
+    setDateField("orderDate");
+    setDateFrom("");
+    setDateTo("");
+    setPickupStatus("all");
+    setPage(1);
+  }
+
+  function refreshContainers() {
+    setPage(1);
+    setRefreshTick((value) => value + 1);
+  }
+
+  function markDateCellSaving(key: string) {
+    savingDateKeysRef.current.add(key);
+    setSavingDateCells((current) => {
+      const next = new Set(current);
+      next.add(key);
+      return next;
+    });
+  }
+
+  function clearDateCellSaving(key: string) {
+    savingDateKeysRef.current.delete(key);
+    const timeoutId = savingDateTimeoutsRef.current.get(key);
+    if (timeoutId !== undefined) {
+      window.clearTimeout(timeoutId);
+      savingDateTimeoutsRef.current.delete(key);
+    }
+    setSavingDateCells((current) => {
+      if (!current.has(key)) return current;
+      const next = new Set(current);
+      next.delete(key);
+      return next;
+    });
+  }
+
+  function clearAllDateSaving() {
+    for (const timeoutId of savingDateTimeoutsRef.current.values()) {
+      window.clearTimeout(timeoutId);
+    }
+    savingDateTimeoutsRef.current.clear();
+    savingDateKeysRef.current.clear();
+    setSavingDateCells(new Set());
+  }
+
+  function markAppointmentCellSaving(key: string) {
+    savingAppointmentKeysRef.current.add(key);
+    setSavingAppointmentCells((current) => {
+      const next = new Set(current);
+      next.add(key);
+      return next;
+    });
+  }
+
+  function clearAppointmentCellSaving(key: string) {
+    savingAppointmentKeysRef.current.delete(key);
+    const timeoutId = savingAppointmentTimeoutsRef.current.get(key);
+    if (timeoutId !== undefined) {
+      window.clearTimeout(timeoutId);
+      savingAppointmentTimeoutsRef.current.delete(key);
+    }
+    setSavingAppointmentCells((current) => {
+      if (!current.has(key)) return current;
+      const next = new Set(current);
+      next.delete(key);
+      return next;
+    });
+  }
+
+  function clearAllAppointmentSaving() {
+    for (const timeoutId of savingAppointmentTimeoutsRef.current.values()) {
+      window.clearTimeout(timeoutId);
+    }
+    savingAppointmentTimeoutsRef.current.clear();
+    savingAppointmentKeysRef.current.clear();
+    setSavingAppointmentCells(new Set());
+  }
+
+  function startDateEdit(container: TableContainerRecord, field: EditableDateField) {
+    const key = getDateCellKey(container.rowId, field);
+    if (savingDateKeysRef.current.has(key)) return;
+
+    setEditingDateCell({ rowId: container.rowId, field });
+    setDateDraft(container[field] ?? "");
+    setDateCellErrors((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }
+
+  function cancelDateEdit() {
+    setEditingDateCell(null);
+    setDateDraft("");
+  }
+
+  async function commitDateEdit(
+    container: TableContainerRecord,
+    field: EditableDateField,
+    value = dateDraft,
+  ) {
+    const key = getDateCellKey(container.rowId, field);
+    if (savingDateKeysRef.current.has(key)) return;
+
+    const nextValue = value.trim() || null;
+    const currentValue = container[field] ?? null;
+
+    if (nextValue && !isValidEditableDateInput(nextValue)) {
+      setDateCellErrors((current) => ({
+        ...current,
+        [key]: "请输入有效日期",
+      }));
+      return;
+    }
+
+    setEditingDateCell(null);
+    setDateDraft("");
+
+    if (nextValue === currentValue) return;
+
+    markDateCellSaving(key);
+    setDateCellErrors((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+
+    if (mockLongTable) {
+      const updatedDates: Partial<Pick<ContainerRecord, EditableDateField>> = {
+        [field]: nextValue,
+      };
+      applyUpdatedDateFields(container, updatedDates);
+      clearDateCellSaving(key);
+      return;
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => {
+        controller.abort();
+        clearDateCellSaving(key);
+        setDateCellErrors((current) => ({
+          ...current,
+          [key]: "保存超时，请重试",
+        }));
+      }, 10000);
+      savingDateTimeoutsRef.current.set(key, timeoutId);
+
+      const response = await fetch("/api/containers", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          sourceOrderId: container.sourceOrderId,
+          field,
+          value: nextValue,
+        }),
+      });
+      const payload = (await response.json()) as {
+        dates?: Partial<Pick<ContainerRecord, EditableDateField>>;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.dates) {
+        throw new Error(payload.error ?? "保存失败");
+      }
+
+      applyUpdatedDateFields(container, payload.dates);
+    } catch (saveError) {
+      if (saveError instanceof DOMException && saveError.name === "AbortError") {
+        return;
+      }
+
+      setDateCellErrors((current) => ({
+        ...current,
+        [key]: saveError instanceof Error ? saveError.message : "保存失败",
+      }));
+    } finally {
+      clearDateCellSaving(key);
+    }
+  }
+
+  function applyUpdatedDateFields(
+    original: TableContainerRecord,
+    dates: Partial<Pick<ContainerRecord, EditableDateField>>,
+  ) {
+    const updatedPickupDate =
+      hasDateField(dates, "pickupDate")
+        ? dates.pickupDate ?? null
+        : original.pickupDate;
+    const wasPickedUp = Boolean(original.pickupDate);
+    const isPickedUp = Boolean(updatedPickupDate);
+    const shouldRemoveFromStatus =
+      (pickupStatus === "pending" && isPickedUp) ||
+      (pickupStatus === "picked" && !isPickedUp);
+
+    setContainers((current) =>
+      current
+        .map((row) =>
+          row.rowId === original.rowId
+            ? {
+                ...row,
+                ...dates,
+                orderDate: hasDateField(dates, "orderDate")
+                  ? dates.orderDate ?? null
+                  : row.orderDate,
+                etaDate: hasDateField(dates, "etaDate")
+                  ? dates.etaDate ?? null
+                  : row.etaDate,
+                lfdDate: hasDateField(dates, "lfdDate")
+                  ? dates.lfdDate ?? null
+                  : row.lfdDate,
+                pickupDate: hasDateField(dates, "pickupDate")
+                  ? dates.pickupDate ?? null
+                  : row.pickupDate,
+              }
+            : row,
+        )
+        .filter(
+          (row) => row.rowId !== original.rowId || !shouldRemoveFromStatus,
+        ),
+    );
+
+    if (wasPickedUp !== isPickedUp) {
+      setPendingPickup((value) =>
+        Math.max(0, value + (isPickedUp ? -1 : 1)),
+      );
+      setPickedUp((value) => Math.max(0, value + (isPickedUp ? 1 : -1)));
+      if (shouldRemoveFromStatus) {
+        setTotalCount((value) => Math.max(0, value - 1));
+      }
+    }
+  }
+
+  function startAppointmentEdit(
+    container: TableContainerRecord,
+    appointment: DeliveryAppointment,
+    field: EditableAppointmentField,
+  ) {
+    const key = getAppointmentCellKey(
+      container.rowId,
+      appointment.sourceAppointmentId,
+      field,
+    );
+    if (savingAppointmentKeysRef.current.has(key)) return;
+
+    setEditingAppointmentCell({
+      rowId: container.rowId,
+      sourceAppointmentId: appointment.sourceAppointmentId,
+      field,
+    });
+    setAppointmentDraft(getAppointmentDraftValue(appointment, field));
+    setAppointmentCellErrors((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }
+
+  function cancelAppointmentEdit() {
+    setEditingAppointmentCell(null);
+    setAppointmentDraft("");
+  }
+
+  async function commitAppointmentEdit(
+    container: TableContainerRecord,
+    appointment: DeliveryAppointment,
+    field: EditableAppointmentField,
+    value = appointmentDraft,
+  ) {
+    const key = getAppointmentCellKey(
+      container.rowId,
+      appointment.sourceAppointmentId,
+      field,
+    );
+    if (savingAppointmentKeysRef.current.has(key)) return;
+
+    const nextValue = value.trim();
+    const currentValue = getAppointmentDraftValue(appointment, field);
+    if (nextValue === currentValue) {
+      cancelAppointmentEdit();
+      return;
+    }
+
+    const validationError = validateAppointmentDraft(field, nextValue);
+    if (validationError) {
+      setAppointmentCellErrors((current) => ({
+        ...current,
+        [key]: validationError,
+      }));
+      return;
+    }
+
+    setEditingAppointmentCell(null);
+    setAppointmentDraft("");
+    markAppointmentCellSaving(key);
+
+    if (mockLongTable) {
+      applyUpdatedAppointment(container, appointment.sourceAppointmentId, {
+        ...appointment,
+        [field]: coerceAppointmentValue(field, nextValue),
+      });
+      clearAppointmentCellSaving(key);
+      return;
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => {
+        controller.abort();
+        clearAppointmentCellSaving(key);
+        setAppointmentCellErrors((current) => ({
+          ...current,
+          [key]: "保存超时，请重试",
+        }));
+      }, 10000);
+      savingAppointmentTimeoutsRef.current.set(key, timeoutId);
+
+      const response = await fetch("/api/containers", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          kind: "appointment",
+          sourceOrderId: container.sourceOrderId,
+          sourceAppointmentId: appointment.sourceAppointmentId,
+          field,
+          value: nextValue || null,
+        }),
+      });
+      const payload = (await response.json()) as {
+        appointment?: DeliveryAppointment;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.appointment) {
+        throw new Error(payload.error ?? "保存失败");
+      }
+
+      applyUpdatedAppointment(
+        container,
+        appointment.sourceAppointmentId,
+        payload.appointment,
+      );
+    } catch (saveError) {
+      if (saveError instanceof DOMException && saveError.name === "AbortError") {
+        return;
+      }
+
+      setAppointmentCellErrors((current) => ({
+        ...current,
+        [key]: saveError instanceof Error ? saveError.message : "保存失败",
+      }));
+    } finally {
+      clearAppointmentCellSaving(key);
+    }
+  }
+
+  function applyUpdatedAppointment(
+    original: TableContainerRecord,
+    sourceAppointmentId: string,
+    updatedAppointment: DeliveryAppointment,
+  ) {
+    setContainers((current) =>
+      current.map((row) =>
+        row.rowId === original.rowId
+          ? {
+              ...row,
+              appointments: row.appointments.map((appointment) =>
+                appointment.sourceAppointmentId === sourceAppointmentId
+                  ? updatedAppointment
+                  : appointment,
+              ),
+            }
+          : row,
+      ),
+    );
+  }
+
+  const columns: ColumnDef<TableContainerRecord>[] = [
+      {
+        id: "rowDrag",
+        header: "",
+        size: 46,
+        minSize: 44,
+        maxSize: 52,
+        enableSorting: false,
+        enableResizing: false,
+        cell: ({ row }) =>
+          isAdmin ? (
+            <div className="dragCell">
+              <button
+                type="button"
+                className={[
+                  "tableIconButton",
+                  "dragHandle",
+                  draggedRowId === row.original.rowId ? "isActive" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                aria-pressed={draggedRowId === row.original.rowId}
+                aria-label={`拖拽调整 ${row.original.containerNumber} 行位置`}
+                title="按住拖拽换行"
+                onPointerDown={(event) =>
+                  handleRowDragPointerDown(event, row.original.rowId)
+                }
+              >
+                <GripVertical size={16} aria-hidden="true" />
+              </button>
+            </div>
+          ) : null,
+      },
+      {
+        id: "expand",
+        header: "",
+        size: 40,
+        minSize: 36,
+        maxSize: 44,
+        enableSorting: false,
+        enableResizing: false,
+        cell: ({ row }) => {
+          const isExpanded = expandedContainers.has(row.original.rowId);
+
+          return (
+            <div className="expandCell">
+              <button
+                type="button"
+                className="tableIconButton expandIconButton"
+                aria-expanded={isExpanded}
+                aria-label={isExpanded ? "收起详情" : "展开详情"}
+                title={isExpanded ? "收起详情" : "展开详情"}
+                onClick={() => toggleContainer(row.original.rowId)}
+              >
+                <ChevronRight
+                  className={isExpanded ? "chevronIcon expanded" : "chevronIcon"}
+                  size={15}
+                  aria-hidden="true"
+                />
+              </button>
+            </div>
+          );
+        },
+      },
+      {
+        id: "rowNumber",
+        header: "",
+        size: 44,
+        minSize: 44,
+        maxSize: 52,
+        enableSorting: false,
+        enableResizing: false,
+        cell: ({ row }) => (
+          <span className="rowIndex">
+            {(page - 1) * PAGE_SIZE + row.index + 1}
+          </span>
+        ),
+      },
+      {
+        accessorKey: "containerNumber",
+        header: "柜号",
+        size: 150,
+        minSize: 140,
+        maxSize: 190,
+        cell: ({ row, getValue }) => {
+          const containerNumber = String(getValue());
+
+          return (
+            <div className="containerCell">
+              <TruncatedText className="containerTitle" text={containerNumber} />
+              <button
+                type="button"
+                className="copyButton"
+                aria-label={`复制柜号 ${containerNumber}`}
+                title={copiedContainer === row.original.rowId ? "已复制" : "复制柜号"}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  copyContainerNumber(containerNumber, row.original.rowId);
+                }}
+              >
+                <Copy size={14} aria-hidden="true" />
+              </button>
+            </div>
+          );
+        },
+      },
+      {
+        accessorKey: "customerCode",
+        header: "客户代码",
+        size: 118,
+        minSize: 110,
+        cell: ({ getValue }) => valueOrDash(getValue<string | null>()),
+      },
+      {
+        accessorKey: "customerName",
+        header: "客户名称",
+        size: 126,
+        minSize: 118,
+        maxSize: 180,
+        cell: ({ getValue }) => (
+          <TruncatedText className="secondaryText" text={String(getValue() ?? "")} />
+        ),
+      },
+      {
+        id: "orderDate",
+        accessorFn: (row) => toDateSortValue(row.orderDate),
+        header: "订单日期",
+        size: 112,
+        minSize: 104,
+        sortingFn: dateSorting,
+        cell: ({ row }) =>
+          isAdmin ? (
+            <EditableDateCell
+              container={row.original}
+              field="orderDate"
+              isEditing={
+                editingDateCell?.rowId === row.original.rowId &&
+                editingDateCell.field === "orderDate"
+              }
+              draft={dateDraft}
+              error={dateCellErrors[getDateCellKey(row.original.rowId, "orderDate")]}
+              isSaving={
+                savingDateCells.has(getDateCellKey(row.original.rowId, "orderDate"))
+              }
+              onCancel={cancelDateEdit}
+              onCommit={(value) => commitDateEdit(row.original, "orderDate", value)}
+              onDraftChange={setDateDraft}
+              onStart={() => startDateEdit(row.original, "orderDate")}
+            />
+          ) : (
+            <DateValue value={row.original.orderDate} />
+          ),
+      },
+      {
+        id: "etaDate",
+        accessorFn: (row) => toDateSortValue(row.etaDate),
+        header: "ETA",
+        size: 104,
+        minSize: 96,
+        sortingFn: dateSorting,
+        cell: ({ row }) =>
+          isAdmin ? (
+            <EditableDateCell
+              container={row.original}
+              field="etaDate"
+              isEditing={
+                editingDateCell?.rowId === row.original.rowId &&
+                editingDateCell.field === "etaDate"
+              }
+              draft={dateDraft}
+              error={dateCellErrors[getDateCellKey(row.original.rowId, "etaDate")]}
+              isSaving={
+                savingDateCells.has(getDateCellKey(row.original.rowId, "etaDate"))
+              }
+              onCancel={cancelDateEdit}
+              onCommit={(value) => commitDateEdit(row.original, "etaDate", value)}
+              onDraftChange={setDateDraft}
+              onStart={() => startDateEdit(row.original, "etaDate")}
+            />
+          ) : (
+            <DateValue value={row.original.etaDate} />
+          ),
+      },
+      {
+        id: "lfdDate",
+        accessorFn: (row) => toDateSortValue(row.lfdDate),
+        header: "LFD",
+        size: 104,
+        minSize: 96,
+        sortingFn: dateSorting,
+        cell: ({ row }) =>
+          isAdmin ? (
+            <EditableDateCell
+              container={row.original}
+              field="lfdDate"
+              isEditing={
+                editingDateCell?.rowId === row.original.rowId &&
+                editingDateCell.field === "lfdDate"
+              }
+              draft={dateDraft}
+              error={dateCellErrors[getDateCellKey(row.original.rowId, "lfdDate")]}
+              isSaving={
+                savingDateCells.has(getDateCellKey(row.original.rowId, "lfdDate"))
+              }
+              onCancel={cancelDateEdit}
+              onCommit={(value) => commitDateEdit(row.original, "lfdDate", value)}
+              onDraftChange={setDateDraft}
+              onStart={() => startDateEdit(row.original, "lfdDate")}
+            />
+          ) : (
+            <DateValue value={row.original.lfdDate} />
+          ),
+      },
+      {
+        id: "pickupDate",
+        accessorFn: (row) => toDateSortValue(row.pickupDate),
+        header: "提柜日期",
+        size: 112,
+        minSize: 104,
+        sortingFn: dateSorting,
+        cell: ({ row }) =>
+          isAdmin ? (
+            <EditableDateCell
+              container={row.original}
+              field="pickupDate"
+              isEditing={
+                editingDateCell?.rowId === row.original.rowId &&
+                editingDateCell.field === "pickupDate"
+              }
+              draft={dateDraft}
+              error={dateCellErrors[getDateCellKey(row.original.rowId, "pickupDate")]}
+              isSaving={
+                savingDateCells.has(getDateCellKey(row.original.rowId, "pickupDate"))
+              }
+              onCancel={cancelDateEdit}
+              onCommit={(value) => commitDateEdit(row.original, "pickupDate", value)}
+              onDraftChange={setDateDraft}
+              onStart={() => startDateEdit(row.original, "pickupDate")}
+            />
+          ) : (
+            <DateValue value={row.original.pickupDate} />
+          ),
+      },
+      {
+        accessorKey: "operationModeLabel",
+        header: "操作方式",
+        size: 92,
+        minSize: 84,
+        cell: ({ row }) => (
+          <span className={`pill ${row.original.operationMode ?? ""}`}>
+            {row.original.operationModeLabel}
+          </span>
+        ),
+      },
+      {
+        id: "location",
+        header: "目的地/仓点",
+        accessorFn: (row) => getLocationText(row) ?? "",
+        size: 288,
+        minSize: 220,
+        maxSize: 340,
+        cell: ({ row }) => (
+          <LocationCell value={getLocationText(row.original)} />
+        ),
+      },
+    ];
+
+  const table = useReactTable({
+    data: containers,
+    columns,
+    state: {
+      sorting,
+      columnSizing,
+    },
+    columnResizeMode: "onChange",
+    getRowId: (row) => row.rowId,
+    onSortingChange: setSorting,
+    onColumnSizingChange: setColumnSizing,
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+  });
+
+  const visibleColumnCount = table.getVisibleLeafColumns().length;
+
+  function toggleContainer(rowId: string) {
+    setExpandedContainers((current) => {
+      const next = new Set(current);
+      if (next.has(rowId)) {
+        next.delete(rowId);
+      } else {
+        next.add(rowId);
+      }
+      return next;
+    });
+  }
+
+  function handleRowDragPointerDown(
+    event: PointerEvent<HTMLButtonElement>,
+    rowId: string,
+  ) {
+    if (!isAdmin) return;
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+
+    cleanupRowDrag();
+    rowDragSessionRef.current = {
+      sourceRowId: rowId,
+      targetRowId: null,
+      rafId: null,
+    };
+    document.body.classList.add("rowDragActive");
+    setDraggedRowId(rowId);
+    setDragOverRowId(null);
+
+    const moveListener = (nativeEvent: globalThis.PointerEvent) => {
+      nativeEvent.preventDefault();
+      updateRowDragTarget(nativeEvent.clientX, nativeEvent.clientY);
+      autoScrollDuringRowDrag(nativeEvent.clientY);
+    };
+    const upListener = (nativeEvent: globalThis.PointerEvent) => {
+      nativeEvent.preventDefault();
+      finishRowDrag();
+    };
+
+    window.addEventListener("pointermove", moveListener, { passive: false });
+    window.addEventListener("pointerup", upListener, { passive: false });
+    window.addEventListener("pointercancel", upListener, { passive: false });
+    rowDragCleanupRef.current = () => {
+      window.removeEventListener("pointermove", moveListener);
+      window.removeEventListener("pointerup", upListener);
+      window.removeEventListener("pointercancel", upListener);
+    };
+  }
+
+  function updateRowDragTarget(clientX: number, clientY: number) {
+    const session = rowDragSessionRef.current;
+    if (!session) return;
+
+    const targetRowId = getRowIdAtPoint(clientX, clientY);
+    session.targetRowId =
+      targetRowId && targetRowId !== session.sourceRowId ? targetRowId : null;
+
+    if (session.rafId !== null) return;
+
+    session.rafId = window.requestAnimationFrame(() => {
+      const current = rowDragSessionRef.current;
+      if (!current) return;
+
+      setDragOverRowId(current.targetRowId);
+      current.rafId = null;
+    });
+  }
+
+  function finishRowDrag() {
+    const session = rowDragSessionRef.current;
+    const sourceRowId = session?.sourceRowId;
+    const targetRowId = session?.targetRowId;
+
+    if (sourceRowId && targetRowId && sourceRowId !== targetRowId) {
+      reorderVisibleRows(sourceRowId, targetRowId);
+    }
+
+    cleanupRowDrag();
+  }
+
+  function cleanupRowDrag() {
+    rowDragCleanupRef.current?.();
+    rowDragCleanupRef.current = null;
+    const session = rowDragSessionRef.current;
+
+    if (session?.rafId !== null && session?.rafId !== undefined) {
+      window.cancelAnimationFrame(session.rafId);
+    }
+
+    rowDragSessionRef.current = null;
+    document.body.classList.remove("rowDragActive");
+    setDraggedRowId(null);
+    setDragOverRowId(null);
+  }
+
+  function reorderVisibleRows(sourceRowId: string, targetRowId: string) {
+    if (sourceRowId === targetRowId) return;
+
+    const visibleRowIds = table.getRowModel().rows.map((row) => row.id);
+    const sourceIndex = visibleRowIds.indexOf(sourceRowId);
+    const targetIndex = visibleRowIds.indexOf(targetRowId);
+
+    if (sourceIndex < 0 || targetIndex < 0) {
+      return;
+    }
+
+    const reorderedVisibleRowIds = moveArrayItem(
+      visibleRowIds,
+      sourceIndex,
+      targetIndex,
+    );
+    const visibleRowIdSet = new Set(visibleRowIds);
+
+    setContainers((current) => {
+      const rowsById = new Map(current.map((container) => [container.rowId, container]));
+      let visibleIndex = 0;
+
+      return current.map((container) => {
+        if (!visibleRowIdSet.has(container.rowId)) return container;
+        const nextRowId = reorderedVisibleRowIds[visibleIndex];
+        visibleIndex += 1;
+        return rowsById.get(nextRowId) ?? container;
+      });
+    });
+    setSorting([]);
+  }
+
+  function getRowIdAtPoint(clientX: number, clientY: number) {
+    const row = document
+      .elementFromPoint(clientX, clientY)
+      ?.closest<HTMLTableRowElement>("tr[data-row-id]");
+
+    if (row?.dataset.rowId) return row.dataset.rowId;
+
+    let closestRowId: string | null = null;
+    let closestDistance = Number.POSITIVE_INFINITY;
+
+    document
+      .querySelectorAll<HTMLTableRowElement>("tr[data-row-id]")
+      .forEach((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        const distance =
+          clientY < rect.top
+            ? rect.top - clientY
+            : clientY > rect.bottom
+              ? clientY - rect.bottom
+              : 0;
+
+        if (distance < closestDistance) {
+          closestDistance = distance;
+          closestRowId = candidate.dataset.rowId ?? null;
+        }
+      });
+
+    return closestRowId;
+  }
+
+  function autoScrollDuringRowDrag(clientY: number) {
+    const threshold = 72;
+    const speed = 18;
+
+    if (clientY < threshold) {
+      window.scrollBy(0, -speed);
+    } else if (clientY > window.innerHeight - threshold) {
+      window.scrollBy(0, speed);
+    }
+
+    const wrapper = tableWrapRef.current;
+    if (!wrapper || wrapper.scrollHeight <= wrapper.clientHeight) return;
+
+    const rect = wrapper.getBoundingClientRect();
+    if (clientY < rect.top + threshold) {
+      wrapper.scrollTop -= speed;
+    } else if (clientY > rect.bottom - threshold) {
+      wrapper.scrollTop += speed;
+    }
+  }
+
+  function copyContainerNumber(containerNumber: string, rowId: string) {
+    navigator.clipboard?.writeText(containerNumber).catch(() => undefined);
+    setCopiedContainer(rowId);
+    window.setTimeout(() => {
+      setCopiedContainer((current) => (current === rowId ? null : current));
+    }, 1200);
+  }
+
+  async function handleLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const normalizedCode = loginCode.trim();
+    const normalizedPassword = loginPassword.trim();
+
+    if (!normalizedCode || !normalizedPassword) {
+      setLoginState("error");
+      setError("请输入客户代码和密码。");
+      return;
+    }
+
+    setLoginState("loading");
+    setError("");
+
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code: normalizedCode,
+          password: normalizedPassword,
+        }),
+      });
+      const payload = (await response.json()) as {
+        customer?: CustomerOption;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.customer) {
+        throw new Error(payload.error ?? "登录失败");
+      }
+
+      setCustomer(payload.customer);
+      setLoginCode("");
+      setLoginPassword("");
+      setPage(1);
+      setLoginState("idle");
+    } catch (loginError) {
+      setLoginState("error");
+      setLoginPassword("");
+      setError(
+        loginError instanceof Error ? loginError.message : "登录失败",
+      );
+    }
+  }
+
+  async function handleLogout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    setCustomer(null);
+    setContainers([]);
+    setTotalCount(0);
+    setAllContainers(0);
+    setPendingPickup(0);
+    setPickedUp(0);
+    setSearchInput("");
+    setSearch("");
+    setPickupStatus("all");
+    setSelectedOperationMode("");
+    setDateField("orderDate");
+    setDateFrom("");
+    setDateTo("");
+    setEditingDateCell(null);
+    setDateDraft("");
+    setDateCellErrors({});
+    clearAllDateSaving();
+    setEditingAppointmentCell(null);
+    setAppointmentDraft("");
+    setAppointmentCellErrors({});
+    clearAllAppointmentSaving();
+    setPage(1);
+  }
+
+  async function handleChangePassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPasswordState("loading");
+    setPasswordMessage("");
+
+    try {
+      const response = await fetch("/api/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      const payload = (await response.json()) as { error?: string };
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? "修改密码失败");
+      }
+
+      setCurrentPassword("");
+      setNewPassword("");
+      setPasswordState("idle");
+      setPasswordMessage("密码已更新");
+      setShowPasswordForm(false);
+    } catch (passwordError) {
+      setPasswordState("error");
+      setPasswordMessage(
+        passwordError instanceof Error ? passwordError.message : "修改密码失败",
+      );
+    }
+  }
+
+  if (!authChecked) {
+    return (
+      <main className="authShell">
+        <section className="loginPanel loadingLoginPanel">
+          <div className="loginBrand">
+            <Image
+              className="loginLogo"
+              src="/logo.svg"
+              alt="G&G Transport Inc"
+              width={248}
+              height={50}
+              priority
+            />
+            <div className="loginBrandCopy">
+              <p className="loginBrandName">G&G Transport</p>
+              <h1>Customer Portal</h1>
+              <p>正在检查登录状态</p>
+            </div>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  if (!customer) {
+    return (
+      <main className="authShell">
+        <section className="loginPanel" aria-labelledby="login-title">
+          <div className="loginBrand">
+            <Image
+              className="loginLogo"
+              src="/logo.svg"
+              alt="G&G Transport Inc"
+              width={248}
+              height={50}
+              priority
+            />
+            <div className="loginBrandCopy">
+              <p className="loginBrandName">G&G Transport</p>
+              <h1 id="login-title">Customer Portal</h1>
+              <p>登录后查看订单、柜号及派送状态</p>
+            </div>
+          </div>
+          <form className="loginForm" onSubmit={handleLogin} noValidate>
+            <div className="loginField">
+              <label htmlFor="login-code">客户代码</label>
+              <div className="loginInputShell">
+                <UserRound
+                  className="loginInputIcon"
+                  size={16}
+                  aria-hidden="true"
+                />
+                <input
+                  id="login-code"
+                  value={loginCode}
+                  onChange={(event) => setLoginCode(event.target.value)}
+                  placeholder="请输入客户代码"
+                  autoComplete="username"
+                  aria-describedby={error ? "login-error" : undefined}
+                  aria-invalid={loginState === "error" && !loginCode.trim()}
+                  autoFocus
+                />
+              </div>
+            </div>
+            <div className="loginField">
+              <label htmlFor="login-password">密码</label>
+              <div className="loginInputShell passwordInputShell">
+                <input
+                  id="login-password"
+                  value={loginPassword}
+                  onChange={(event) => setLoginPassword(event.target.value)}
+                  placeholder="请输入密码"
+                  type={showLoginPassword ? "text" : "password"}
+                  autoComplete="current-password"
+                  aria-describedby={error ? "login-error" : undefined}
+                  aria-invalid={loginState === "error" && !loginPassword.trim()}
+                />
+                <button
+                  type="button"
+                  className="passwordToggle"
+                  aria-label={showLoginPassword ? "隐藏密码" : "显示密码"}
+                  onClick={() => setShowLoginPassword((value) => !value)}
+                >
+                  {showLoginPassword ? (
+                    <EyeOff size={16} aria-hidden="true" />
+                  ) : (
+                    <Eye size={16} aria-hidden="true" />
+                  )}
+                </button>
+              </div>
+            </div>
+            {error ? (
+              <div id="login-error" className="loginError" role="alert">
+                <AlertCircle size={16} aria-hidden="true" />
+                <span>{error}</span>
+              </div>
+            ) : null}
+            <button
+              className="primaryButton loginSubmitButton"
+              type="submit"
+              disabled={loginState === "loading"}
+            >
+              {loginState === "loading" ? (
+                <>
+                  <LoaderCircle
+                    className="buttonSpinner"
+                    size={16}
+                    aria-hidden="true"
+                  />
+                  正在登录...
+                </>
+              ) : (
+                "登录"
+              )}
+            </button>
+            <p className="loginHelp">无法登录？请联系 G&G Transport 客服</p>
+          </form>
+        </section>
+        <p className="authCopyright">© 2026 G&G Transport Inc.</p>
+      </main>
+    );
+  }
+
+  return (
+    <main className="shell">
+      <section className="pageHeader">
+        <div className="pageTitleGroup">
+          <Image
+            className="headerLogo"
+            src="/logo.svg"
+            alt="G&G Transport Inc"
+            width={248}
+            height={50}
+            priority
+          />
+          <div className="titleCopy">
+            <p className="portalEyebrow">Customer Portal</p>
+            <div className="titleLine">
+              <h1>{customer.name}</h1>
+              <span className={`roleBadge ${isAdmin ? "admin" : "customer"}`}>
+                {isAdmin ? "客服编辑" : "客户只读"}
+              </span>
+            </div>
+            <p className="pageSubtitle">订单管理与派送状态</p>
+          </div>
+        </div>
+        <div className="topActions">
+          <button className="iconButton" type="button" onClick={refreshContainers}>
+            <RefreshCw size={16} aria-hidden="true" />
+            刷新
+          </button>
+          {!isAdmin ? (
+            <button
+              className="iconButton"
+              type="button"
+              onClick={() => setShowPasswordForm((value) => !value)}
+            >
+              <Settings size={16} aria-hidden="true" />
+              修改密码
+            </button>
+          ) : null}
+          <button
+            className="iconButton dangerButton"
+            type="button"
+            onClick={handleLogout}
+          >
+            <LogOut size={16} aria-hidden="true" />
+            退出登录
+          </button>
+        </div>
+      </section>
+
+      {!isAdmin && (showPasswordForm || passwordMessage) ? (
+        <section className="passwordPanel">
+          <form className="passwordForm" onSubmit={handleChangePassword}>
+            <label className="field">
+              <span>当前密码</span>
+              <input
+                value={currentPassword}
+                onChange={(event) => setCurrentPassword(event.target.value)}
+                type="password"
+              />
+            </label>
+            <label className="field">
+              <span>新密码</span>
+              <input
+                value={newPassword}
+                onChange={(event) => setNewPassword(event.target.value)}
+                type="password"
+                minLength={6}
+              />
+            </label>
+            <button
+              className="primaryButton"
+              type="submit"
+              disabled={passwordState === "loading"}
+            >
+              {passwordState === "loading" ? "保存中" : "保存密码"}
+            </button>
+            {passwordMessage ? (
+              <div
+                className={
+                  passwordState === "error" ? "error compact" : "successMessage"
+                }
+              >
+                {passwordMessage}
+              </div>
+            ) : null}
+          </form>
+        </section>
+      ) : null}
+
+      <section className="controls" aria-label="筛选条件">
+        <label className="field searchField">
+          <Search className="fieldIcon" size={16} aria-hidden="true" />
+          <input
+            value={searchInput}
+            onChange={(event) => setSearchInput(event.target.value)}
+            placeholder="搜索柜号、仓点或订单号"
+          />
+        </label>
+
+        <label className="field compactField">
+          <select
+            value={selectedOperationMode}
+            onChange={(event) => setSelectedOperationMode(event.target.value)}
+            aria-label="操作方式"
+          >
+            <option value="">全部方式</option>
+            <option value="unload">拆柜</option>
+            <option value="direct_delivery">直送</option>
+          </select>
+        </label>
+
+        <label className="field compactField">
+          <select
+            value={dateField}
+            onChange={(event) =>
+              setDateField(event.target.value as DateFilterField)
+            }
+            aria-label="日期字段"
+          >
+            <option value="orderDate">订单日期</option>
+            <option value="etaDate">ETA</option>
+            <option value="lfdDate">LFD</option>
+            <option value="pickupDate">提柜日期</option>
+          </select>
+        </label>
+
+        <div className="dateRangeGroup" aria-label="日期范围">
+          <label className="field dateField">
+            <CalendarDays className="fieldIcon" size={16} aria-hidden="true" />
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={(event) => setDateFrom(event.target.value)}
+              aria-label="开始日期"
+            />
+          </label>
+          <span className="dateSeparator">-</span>
+          <label className="field dateField">
+            <input
+              type="date"
+              value={dateTo}
+              onChange={(event) => setDateTo(event.target.value)}
+              aria-label="结束日期"
+            />
+          </label>
+        </div>
+
+        <button
+          className="resetButton"
+          type="button"
+          onClick={resetFilters}
+          disabled={!hasActiveFilters}
+        >
+          <RotateCcw size={15} aria-hidden="true" />
+          重置
+        </button>
+      </section>
+
+      <section className="statusTabs" aria-label="提柜状态">
+        <StatusTab
+          active={pickupStatus === "all"}
+          count={allContainers}
+          label="全部"
+          onClick={() => setPickupStatus("all")}
+        />
+        <StatusTab
+          active={pickupStatus === "pending"}
+          count={pendingPickup}
+          label="未提柜"
+          onClick={() => setPickupStatus("pending")}
+        />
+        <StatusTab
+          active={pickupStatus === "picked"}
+          count={pickedUp}
+          label="已提柜"
+          onClick={() => setPickupStatus("picked")}
+        />
+      </section>
+
+      {error ? <div className="error">{error}</div> : null}
+
+      <section className="tableArea">
+        <div className="tableHeader">
+          <h2>柜号列表</h2>
+          <span>{loadState === "loading" ? "加载中" : `唯一柜号 ${pageStats.uniqueContainers}`}</span>
+        </div>
+
+        <div className="tableWrap" ref={tableWrapRef}>
+          <table
+            className="containerTable"
+            style={{ minWidth: table.getCenterTotalSize() }}
+          >
+            <colgroup>
+              {table.getVisibleLeafColumns().map((column) => (
+                <col
+                  key={column.id}
+                  style={{
+                    width: column.getSize(),
+                    minWidth: column.columnDef.minSize,
+                    maxWidth: column.columnDef.maxSize,
+                  }}
+                />
+              ))}
+            </colgroup>
+            <thead>
+              {table.getHeaderGroups().map((headerGroup) => (
+                <tr key={headerGroup.id}>
+                  {headerGroup.headers.map((header) => (
+                    <th
+                      key={header.id}
+                      style={{ width: header.getSize() }}
+                      aria-sort={
+                        header.column.getCanSort()
+                          ? getAriaSort(header.column.getIsSorted())
+                          : undefined
+                      }
+                    >
+                      <div className="headerCell">
+                        {header.isPlaceholder ? null : (
+                          <button
+                            type="button"
+                            className="sortButton"
+                            onClick={header.column.getToggleSortingHandler()}
+                            disabled={!header.column.getCanSort()}
+                            title={
+                              header.column.getCanSort()
+                                ? getSortTitle(header.column.getIsSorted())
+                                : undefined
+                            }
+                          >
+                            <span>
+                              {flexRender(
+                                header.column.columnDef.header,
+                                header.getContext(),
+                              )}
+                            </span>
+                            {header.column.getCanSort() ? (
+                              <span className="sortIndicator">
+                                <SortIcon
+                                  sortDirection={header.column.getIsSorted()}
+                                />
+                              </span>
+                            ) : null}
+                          </button>
+                        )}
+                        {header.column.getCanResize() ? (
+                          <button
+                            type="button"
+                            className={`resizeHandle ${
+                              header.column.getIsResizing() ? "isResizing" : ""
+                            }`}
+                            aria-label={`调整 ${String(
+                              header.column.columnDef.header,
+                            )} 列宽`}
+                            onMouseDown={header.getResizeHandler()}
+                            onTouchStart={header.getResizeHandler()}
+                          />
+                        ) : null}
+                      </div>
+                    </th>
+                  ))}
+                </tr>
+              ))}
+            </thead>
+            <tbody>
+              {table.getRowModel().rows.map((row) => {
+                const container = row.original;
+                const isExpanded = expandedContainers.has(container.rowId);
+
+                return (
+                  <Fragment key={row.id}>
+                    <tr
+                      data-row-id={row.id}
+                      className={[
+                        draggedRowId === row.id ? "isDragging" : "",
+                        dragOverRowId === row.id ? "isDragTarget" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                    >
+                      {row.getVisibleCells().map((cell) => {
+                        const content = flexRender(
+                          cell.column.columnDef.cell,
+                          cell.getContext(),
+                        );
+
+                        if (cell.column.id === "containerNumber") {
+                          return (
+                            <th
+                              key={cell.id}
+                              scope="row"
+                              className="strong"
+                              style={{ width: cell.column.getSize() }}
+                            >
+                              {content}
+                            </th>
+                          );
+                        }
+
+                        return (
+                          <td
+                            key={cell.id}
+                            style={{ width: cell.column.getSize() }}
+                          >
+                            {content}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                    {isExpanded ? (
+                      <tr className="detailsRow">
+                        <td colSpan={visibleColumnCount}>
+                          <div className="detailsPanel">
+                            <div className="detailsTitle">送货预约信息</div>
+                            {container.appointments.length ? (
+                              <table className="appointmentTable">
+                                <thead>
+                                  <tr>
+                                    <th>仓点</th>
+                                    <th>ISA Number</th>
+                                    <th>送货时间</th>
+                                    <th>排车板数</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {container.appointments.map(
+                                    (appointment, appointmentIndex) => (
+                                      <tr
+                                        key={`${appointment.sourceAppointmentId}-${appointmentIndex}`}
+                                      >
+                                        <td>
+                                          <EditableAppointmentCell
+                                            appointment={appointment}
+                                            container={container}
+                                            draft={appointmentDraft}
+                                            error={
+                                              appointmentCellErrors[
+                                                getAppointmentCellKey(
+                                                  container.rowId,
+                                                  appointment.sourceAppointmentId,
+                                                  "warehousePoint",
+                                                )
+                                              ]
+                                            }
+                                            field="warehousePoint"
+                                            isEditing={
+                                              isEditingAppointmentCell(
+                                                editingAppointmentCell,
+                                                container.rowId,
+                                                appointment.sourceAppointmentId,
+                                                "warehousePoint",
+                                              )
+                                            }
+                                            isSaving={savingAppointmentCells.has(
+                                              getAppointmentCellKey(
+                                                container.rowId,
+                                                appointment.sourceAppointmentId,
+                                                "warehousePoint",
+                                              ),
+                                            )}
+                                            onCancel={cancelAppointmentEdit}
+                                            onCommit={(value) =>
+                                              commitAppointmentEdit(
+                                                container,
+                                                appointment,
+                                                "warehousePoint",
+                                                value,
+                                              )
+                                            }
+                                            onDraftChange={setAppointmentDraft}
+                                            readOnly={!isAdmin}
+                                            onStart={() =>
+                                              startAppointmentEdit(
+                                                container,
+                                                appointment,
+                                                "warehousePoint",
+                                              )
+                                            }
+                                          />
+                                        </td>
+                                        <td>
+                                          <EditableAppointmentCell
+                                            appointment={appointment}
+                                            container={container}
+                                            draft={appointmentDraft}
+                                            error={
+                                              appointmentCellErrors[
+                                                getAppointmentCellKey(
+                                                  container.rowId,
+                                                  appointment.sourceAppointmentId,
+                                                  "isaNumber",
+                                                )
+                                              ]
+                                            }
+                                            field="isaNumber"
+                                            isEditing={
+                                              isEditingAppointmentCell(
+                                                editingAppointmentCell,
+                                                container.rowId,
+                                                appointment.sourceAppointmentId,
+                                                "isaNumber",
+                                              )
+                                            }
+                                            isSaving={savingAppointmentCells.has(
+                                              getAppointmentCellKey(
+                                                container.rowId,
+                                                appointment.sourceAppointmentId,
+                                                "isaNumber",
+                                              ),
+                                            )}
+                                            onCancel={cancelAppointmentEdit}
+                                            onCommit={(value) =>
+                                              commitAppointmentEdit(
+                                                container,
+                                                appointment,
+                                                "isaNumber",
+                                                value,
+                                              )
+                                            }
+                                            onDraftChange={setAppointmentDraft}
+                                            readOnly={!isAdmin}
+                                            onStart={() =>
+                                              startAppointmentEdit(
+                                                container,
+                                                appointment,
+                                                "isaNumber",
+                                              )
+                                            }
+                                          />
+                                        </td>
+                                        <td>
+                                          <EditableAppointmentCell
+                                            appointment={appointment}
+                                            container={container}
+                                            draft={appointmentDraft}
+                                            error={
+                                              appointmentCellErrors[
+                                                getAppointmentCellKey(
+                                                  container.rowId,
+                                                  appointment.sourceAppointmentId,
+                                                  "deliveryTime",
+                                                )
+                                              ]
+                                            }
+                                            field="deliveryTime"
+                                            isEditing={
+                                              isEditingAppointmentCell(
+                                                editingAppointmentCell,
+                                                container.rowId,
+                                                appointment.sourceAppointmentId,
+                                                "deliveryTime",
+                                              )
+                                            }
+                                            isSaving={savingAppointmentCells.has(
+                                              getAppointmentCellKey(
+                                                container.rowId,
+                                                appointment.sourceAppointmentId,
+                                                "deliveryTime",
+                                              ),
+                                            )}
+                                            onCancel={cancelAppointmentEdit}
+                                            onCommit={(value) =>
+                                              commitAppointmentEdit(
+                                                container,
+                                                appointment,
+                                                "deliveryTime",
+                                                value,
+                                              )
+                                            }
+                                            onDraftChange={setAppointmentDraft}
+                                            readOnly={!isAdmin}
+                                            onStart={() =>
+                                              startAppointmentEdit(
+                                                container,
+                                                appointment,
+                                                "deliveryTime",
+                                              )
+                                            }
+                                          />
+                                        </td>
+                                        <td>
+                                          <EditableAppointmentCell
+                                            appointment={appointment}
+                                            container={container}
+                                            draft={appointmentDraft}
+                                            error={
+                                              appointmentCellErrors[
+                                                getAppointmentCellKey(
+                                                  container.rowId,
+                                                  appointment.sourceAppointmentId,
+                                                  "palletCount",
+                                                )
+                                              ]
+                                            }
+                                            field="palletCount"
+                                            isEditing={
+                                              isEditingAppointmentCell(
+                                                editingAppointmentCell,
+                                                container.rowId,
+                                                appointment.sourceAppointmentId,
+                                                "palletCount",
+                                              )
+                                            }
+                                            isSaving={savingAppointmentCells.has(
+                                              getAppointmentCellKey(
+                                                container.rowId,
+                                                appointment.sourceAppointmentId,
+                                                "palletCount",
+                                              ),
+                                            )}
+                                            onCancel={cancelAppointmentEdit}
+                                            onCommit={(value) =>
+                                              commitAppointmentEdit(
+                                                container,
+                                                appointment,
+                                                "palletCount",
+                                                value,
+                                              )
+                                            }
+                                            onDraftChange={setAppointmentDraft}
+                                            readOnly={!isAdmin}
+                                            onStart={() =>
+                                              startAppointmentEdit(
+                                                container,
+                                                appointment,
+                                                "palletCount",
+                                              )
+                                            }
+                                          />
+                                        </td>
+                                      </tr>
+                                    ),
+                                  )}
+                                </tbody>
+                              </table>
+                            ) : (
+                              <div className="noAppointments">
+                                该柜号暂无送货预约信息
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
+              {!containers.length && loadState !== "loading" ? (
+                <tr>
+                  <td colSpan={visibleColumnCount} className="empty">
+                    <div className="emptyState">
+                      <strong>没有匹配数据</strong>
+                      <span>调整搜索、日期或状态筛选后再试。</span>
+                      {hasActiveFilters ? (
+                        <button type="button" onClick={resetFilters}>
+                          重置筛选
+                        </button>
+                      ) : null}
+                    </div>
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+        <div className="pagination">
+          <button
+            type="button"
+            onClick={() => setPage((value) => Math.max(1, value - 1))}
+            disabled={page <= 1 || loadState === "loading"}
+          >
+            上一页
+          </button>
+          <span>
+            {pageStart}-{pageEnd} / {totalCount}，每页 {PAGE_SIZE}
+          </span>
+          <button
+            type="button"
+            onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
+            disabled={page >= totalPages || loadState === "loading"}
+          >
+            下一页
+          </button>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function StatusTab({
+  active,
+  count,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  count: number;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={`statusTab ${active ? "active" : ""}`}
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+    >
+      <span>{label}</span>
+      <strong>{count}</strong>
+    </button>
+  );
+}
+
+function EditableDateCell({
+  container,
+  draft,
+  error,
+  field,
+  isEditing,
+  isSaving,
+  onCancel,
+  onCommit,
+  onDraftChange,
+  onStart,
+}: {
+  container: TableContainerRecord;
+  draft: string;
+  error?: string;
+  field: EditableDateField;
+  isEditing: boolean;
+  isSaving: boolean;
+  onCancel: () => void;
+  onCommit: (value: string) => void;
+  onDraftChange: (value: string) => void;
+  onStart: () => void;
+}) {
+  const value = container[field];
+  const label = getDateFieldLabel(field);
+
+  if (isEditing) {
+    return (
+      <div className="editableDateCell isEditing">
+        <input
+          className="editableDateInput"
+          type="date"
+          value={draft}
+          aria-label={`${container.containerNumber} ${label}`}
+          aria-invalid={Boolean(error)}
+          autoFocus
+          onBlur={(event) => onCommit(event.currentTarget.value)}
+          onChange={(event) => {
+            const nextValue = event.currentTarget.value;
+            onDraftChange(nextValue);
+            if (nextValue && isValidEditableDateInput(nextValue)) {
+              window.setTimeout(() => onCommit(nextValue), 0);
+            }
+          }}
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.currentTarget.blur();
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              onCancel();
+            }
+          }}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className={[
+        "editableDateCell",
+        error ? "hasError" : "",
+        isSaving ? "isSaving" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      aria-label={`${container.containerNumber} ${label}，点击修改`}
+      disabled={isSaving}
+      title={error ?? `${label}：${valueOrDash(value)}，点击修改`}
+      onClick={onStart}
+    >
+      {isSaving ? (
+        <>
+          <LoaderCircle className="cellSpinner" size={13} aria-hidden="true" />
+          <span className="dateText">保存中</span>
+        </>
+      ) : (
+        <DateValue value={value} />
+      )}
+    </button>
+  );
+}
+
+function EditableAppointmentCell({
+  appointment,
+  container,
+  draft,
+  error,
+  field,
+  isEditing,
+  isSaving,
+  onCancel,
+  onCommit,
+  onDraftChange,
+  readOnly,
+  onStart,
+}: {
+  appointment: DeliveryAppointment;
+  container: TableContainerRecord;
+  draft: string;
+  error?: string;
+  field: EditableAppointmentField;
+  isEditing: boolean;
+  isSaving: boolean;
+  onCancel: () => void;
+  onCommit: (value: string) => void;
+  onDraftChange: (value: string) => void;
+  readOnly?: boolean;
+  onStart: () => void;
+}) {
+  const label = getAppointmentFieldLabel(field);
+  const displayValue = getAppointmentDisplayValue(appointment, field);
+
+  if (readOnly) {
+    return (
+      <span
+        className="readonlyAppointmentCell"
+        title={`${label}：${displayValue}`}
+      >
+        {displayValue}
+      </span>
+    );
+  }
+
+  if (isEditing) {
+    return (
+      <div className="editableAppointmentCell isEditing">
+        <input
+          className="editableAppointmentInput"
+          type={field === "deliveryTime" ? "datetime-local" : field === "palletCount" ? "number" : "text"}
+          min={field === "palletCount" ? "0" : undefined}
+          step={field === "palletCount" ? "1" : undefined}
+          value={draft}
+          aria-label={`${container.containerNumber} ${label}`}
+          aria-invalid={Boolean(error)}
+          autoFocus
+          onBlur={(event) => onCommit(event.currentTarget.value)}
+          onChange={(event) => onDraftChange(event.currentTarget.value)}
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.currentTarget.blur();
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              onCancel();
+            }
+          }}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className={[
+        "editableAppointmentCell",
+        error ? "hasError" : "",
+        isSaving ? "isSaving" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      aria-label={`${container.containerNumber} ${label}，点击修改`}
+      disabled={isSaving || !appointment.sourceAppointmentId}
+      title={error ?? `${label}：${displayValue}，点击修改`}
+      onClick={onStart}
+    >
+      {isSaving ? (
+        <>
+          <LoaderCircle className="cellSpinner" size={13} aria-hidden="true" />
+          <span>保存中</span>
+        </>
+      ) : (
+        displayValue
+      )}
+    </button>
+  );
+}
+
+function DateValue({ value }: { value: string | null | undefined }) {
+  const displayValue = valueOrDash(value);
+
+  return (
+    <span className={displayValue === "—" ? "dateText emptyText" : "dateText"}>
+      {displayValue}
+    </span>
+  );
+}
+
+function SortIcon({
+  sortDirection,
+}: {
+  sortDirection: false | "asc" | "desc";
+}) {
+  if (sortDirection === "asc") {
+    return <ArrowUp size={14} aria-hidden="true" />;
+  }
+
+  if (sortDirection === "desc") {
+    return <ArrowDown size={14} aria-hidden="true" />;
+  }
+
+  return <ArrowUpDown size={14} aria-hidden="true" />;
+}
+
+function LocationCell({ value }: { value: string | null | undefined }) {
+  const display = formatLocationPreview(value);
+
+  return (
+    <AccessibleTooltip content={display.tooltip === "—" ? "" : display.tooltip}>
+      {({ triggerProps }) => (
+        <span
+          className="truncatedText locationCell"
+          title={display.tooltip === "—" ? undefined : display.tooltip}
+          {...triggerProps}
+        >
+          <span className="locationPreviewText">{display.preview}</span>
+          {display.extraCount ? (
+            <span className="locationMoreBadge">+{display.extraCount}</span>
+          ) : null}
+        </span>
+      )}
+    </AccessibleTooltip>
+  );
+}
+
+function TruncatedText({
+  text,
+  tooltip,
+  className,
+}: {
+  text: string | null | undefined;
+  tooltip?: string;
+  className?: string;
+}) {
+  const value = valueOrDash(text);
+  const tooltipText = tooltip ?? value;
+  const showTooltip = tooltipText !== "—";
+
+  return (
+    <AccessibleTooltip content={showTooltip ? tooltipText : ""}>
+      {({ triggerProps }) => (
+        <span
+          className={["truncatedText", className].filter(Boolean).join(" ")}
+          title={showTooltip ? tooltipText : undefined}
+          {...triggerProps}
+        >
+          {value}
+        </span>
+      )}
+    </AccessibleTooltip>
+  );
+}
+
+function AccessibleTooltip({
+  content,
+  children,
+}: {
+  content: string;
+  children: (props: {
+    triggerProps: {
+      "aria-describedby"?: string;
+      onBlur: () => void;
+      onClick: (event: MouseEvent<HTMLElement>) => void;
+      onFocus: (event: FocusEvent<HTMLElement>) => void;
+      onMouseEnter: (event: MouseEvent<HTMLElement>) => void;
+      onMouseOver: (event: MouseEvent<HTMLElement>) => void;
+      onMouseLeave: () => void;
+      onPointerEnter: (event: PointerEvent<HTMLElement>) => void;
+      onPointerLeave: () => void;
+      tabIndex?: number;
+    };
+  }) => ReactNode;
+}) {
+  const [tooltip, setTooltip] = useState<{
+    id: string;
+    left: number;
+    top: number;
+  } | null>(null);
+  const tooltipId = useId();
+
+  function openTooltip(element: HTMLElement) {
+    if (!content || typeof window === "undefined") return;
+
+    const rect = element.getBoundingClientRect();
+    const maxWidth = Math.min(420, window.innerWidth - 32);
+    const left = Math.max(
+      16,
+      Math.min(rect.left, window.innerWidth - maxWidth - 16),
+    );
+    const top =
+      rect.bottom + 10 > window.innerHeight - 80
+        ? Math.max(16, rect.top - 10)
+        : rect.bottom + 8;
+
+    setTooltip({
+      id: tooltipId,
+      left,
+      top,
+    });
+  }
+
+  function closeTooltip() {
+    setTooltip(null);
+  }
+
+  const triggerProps = content
+    ? {
+        "aria-describedby": tooltip?.id,
+        onBlur: closeTooltip,
+        onClick: (event: MouseEvent<HTMLElement>) =>
+          openTooltip(event.currentTarget),
+        onFocus: (event: FocusEvent<HTMLElement>) =>
+          openTooltip(event.currentTarget),
+        onMouseEnter: (event: MouseEvent<HTMLElement>) =>
+          openTooltip(event.currentTarget),
+        onMouseOver: (event: MouseEvent<HTMLElement>) =>
+          openTooltip(event.currentTarget),
+        onMouseLeave: closeTooltip,
+        onPointerEnter: (event: PointerEvent<HTMLElement>) =>
+          openTooltip(event.currentTarget),
+        onPointerLeave: closeTooltip,
+        tabIndex: 0,
+      }
+    : {
+        onBlur: closeTooltip,
+        onClick: () => undefined,
+        onFocus: () => undefined,
+        onMouseEnter: () => undefined,
+        onMouseOver: () => undefined,
+        onMouseLeave: closeTooltip,
+        onPointerEnter: () => undefined,
+        onPointerLeave: closeTooltip,
+      };
+
+  return (
+    <>
+      {children({ triggerProps })}
+      {tooltip && content
+        ? createPortal(
+            <div
+              id={tooltip.id}
+              role="tooltip"
+              className="cellTooltip"
+              style={{ left: tooltip.left, top: tooltip.top }}
+            >
+              {content}
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
+  );
+}
+
+function valueOrDash(value: string | null | undefined) {
+  return value && value.trim() ? value : "—";
+}
+
+function formatLocationPreview(value: string | null | undefined) {
+  const rawValue = value?.trim();
+  if (!rawValue) {
+    return { preview: "—", tooltip: "—", extraCount: 0 };
+  }
+
+  const locations = rawValue
+    .split(/[,，;；\n]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (locations.length <= MAX_INLINE_LOCATIONS) {
+    return {
+      preview: rawValue,
+      tooltip: locations.length > 1 ? locations.join("\n") : rawValue,
+      extraCount: 0,
+    };
+  }
+
+  return {
+    preview: locations.slice(0, MAX_INLINE_LOCATIONS).join(", "),
+    tooltip: locations.join("\n"),
+    extraCount: locations.length - MAX_INLINE_LOCATIONS,
+  };
+}
+
+function createRowId(container: ContainerRecord, index: number) {
+  if (container.sourceOrderId) return container.sourceOrderId;
+
+  return [
+    container.containerNumber,
+    container.customerId ?? "no-customer",
+    container.orderDate ?? "no-date",
+    index,
+  ].join("-");
+}
+
+function toDateSortValue(value: string | null) {
+  if (!value) return undefined;
+  const timestamp = Date.parse(`${value}T00:00:00Z`);
+  return Number.isNaN(timestamp) ? undefined : timestamp;
+}
+
+const dateSorting: SortingFn<TableContainerRecord> = (rowA, rowB, columnId) => {
+  const valueA = rowA.getValue<number | undefined>(columnId);
+  const valueB = rowB.getValue<number | undefined>(columnId);
+
+  if (valueA === undefined && valueB === undefined) return 0;
+  if (valueA === undefined) return 1;
+  if (valueB === undefined) return -1;
+  return valueA - valueB;
+};
+
+function moveArrayItem<T>(items: T[], fromIndex: number, toIndex: number) {
+  const next = [...items];
+  const [item] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, item);
+  return next;
+}
+
+function getAriaSort(sortDirection: false | "asc" | "desc") {
+  if (sortDirection === "asc") return "ascending";
+  if (sortDirection === "desc") return "descending";
+  return "none";
+}
+
+function getSortTitle(sortDirection: false | "asc" | "desc") {
+  if (sortDirection === "asc") return "点击降序排列";
+  if (sortDirection === "desc") return "点击取消排序";
+  return "点击升序排列";
+}
+
+function getDateCellKey(rowId: string, field: EditableDateField) {
+  return `${rowId}:${field}`;
+}
+
+function getDateFieldLabel(field: EditableDateField) {
+  if (field === "orderDate") return "订单日期";
+  if (field === "etaDate") return "ETA";
+  if (field === "lfdDate") return "LFD";
+  return "提柜日期";
+}
+
+function getAppointmentCellKey(
+  rowId: string,
+  sourceAppointmentId: string,
+  field: EditableAppointmentField,
+) {
+  return `${rowId}:${sourceAppointmentId}:${field}`;
+}
+
+function getAppointmentFieldLabel(field: EditableAppointmentField) {
+  if (field === "warehousePoint") return "仓点";
+  if (field === "isaNumber") return "ISA Number";
+  if (field === "deliveryTime") return "送货时间";
+  return "排车板数";
+}
+
+function isEditingAppointmentCell(
+  cell: {
+    rowId: string;
+    sourceAppointmentId: string;
+    field: EditableAppointmentField;
+  } | null,
+  rowId: string,
+  sourceAppointmentId: string,
+  field: EditableAppointmentField,
+) {
+  return (
+    cell?.rowId === rowId &&
+    cell.sourceAppointmentId === sourceAppointmentId &&
+    cell.field === field
+  );
+}
+
+function getAppointmentDisplayValue(
+  appointment: DeliveryAppointment,
+  field: EditableAppointmentField,
+) {
+  if (field === "warehousePoint") return valueOrDash(appointment.warehousePoint);
+  if (field === "isaNumber") return valueOrDash(appointment.isaNumber);
+  if (field === "deliveryTime") return valueOrDash(appointment.deliveryTime);
+  return appointment.palletCount === null ? "—" : String(appointment.palletCount);
+}
+
+function getAppointmentDraftValue(
+  appointment: DeliveryAppointment,
+  field: EditableAppointmentField,
+) {
+  if (field === "warehousePoint") return appointment.warehousePoint ?? "";
+  if (field === "isaNumber") return appointment.isaNumber ?? "";
+  if (field === "deliveryTime") {
+    return appointment.deliveryTime?.replace(" ", "T") ?? "";
+  }
+  return appointment.palletCount === null ? "" : String(appointment.palletCount);
+}
+
+function validateAppointmentDraft(
+  field: EditableAppointmentField,
+  value: string,
+) {
+  if (field === "palletCount" && value && !/^\d+$/.test(value)) {
+    return "板数必须是非负整数";
+  }
+
+  if (
+    field === "deliveryTime" &&
+    value &&
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)
+  ) {
+    return "请输入有效送货时间";
+  }
+
+  return "";
+}
+
+function coerceAppointmentValue(
+  field: EditableAppointmentField,
+  value: string,
+) {
+  if (field === "palletCount") return value ? Number(value) : null;
+  if (field === "deliveryTime") return value ? value.replace("T", " ") : null;
+  return value || null;
+}
+
+function hasDateField(
+  dates: Partial<Pick<ContainerRecord, EditableDateField>>,
+  field: EditableDateField,
+) {
+  return Object.prototype.hasOwnProperty.call(dates, field);
+}
+
+function isValidEditableDateInput(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && formatDateInput(date) === value;
+}
+
+function formatDateInput(date: Date) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "UTC",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function getLocationText(container: ContainerRecord) {
+  if (container.operationMode === "direct_delivery") {
+    return container.destination;
+  }
+
+  if (container.operationMode === "unload") {
+    return container.warehousePoints;
+  }
+
+  return container.destination ?? container.warehousePoints;
+}
+
+function getMockContainerPayload({
+  operationMode,
+  search,
+  dateField,
+  dateFrom,
+  dateTo,
+  pickupStatus,
+  page,
+  pageSize,
+}: {
+  operationMode: string;
+  search: string;
+  dateField: DateFilterField;
+  dateFrom: string;
+  dateTo: string;
+  pickupStatus: PickupStatus;
+  page: number;
+  pageSize: number;
+}): {
+  containers: TableContainerRecord[];
+  total: number;
+  allContainers: number;
+  pendingPickup: number;
+  pickedUp: number;
+} {
+  const allContainers = createMockContainers();
+  const normalizedSearch = search.trim().toLowerCase();
+  const baseFiltered = allContainers.filter((container) => {
+    const matchesOperationMode =
+      !operationMode || container.operationMode === operationMode;
+    const locationText = getLocationText(container)?.toLowerCase() ?? "";
+    const matchesSearch =
+      !normalizedSearch ||
+      container.containerNumber.toLowerCase().includes(normalizedSearch) ||
+      locationText.includes(normalizedSearch);
+    const dateValue = container[dateField];
+    const matchesDateFrom = !dateFrom || Boolean(dateValue && dateValue >= dateFrom);
+    const matchesDateTo = !dateTo || Boolean(dateValue && dateValue <= dateTo);
+
+    return matchesOperationMode && matchesSearch && matchesDateFrom && matchesDateTo;
+  });
+  const filtered = baseFiltered.filter((container) => {
+    if (pickupStatus === "pending") return !container.pickupDate;
+    if (pickupStatus === "picked") return Boolean(container.pickupDate);
+    return true;
+  });
+  const start = (page - 1) * pageSize;
+
+  return {
+    containers: filtered.slice(start, start + pageSize),
+    total: filtered.length,
+    allContainers: baseFiltered.length,
+    pendingPickup: baseFiltered.filter((container) => !container.pickupDate).length,
+    pickedUp: baseFiltered.filter((container) => Boolean(container.pickupDate)).length,
+  };
+}
+
+function createMockContainers(): TableContainerRecord[] {
+  const edgeCases: ContainerRecord[] = [
+    {
+      sourceOrderId: "mock-edge-1",
+      containerNumber: "TEST0000001",
+      customerId: "mock-customer",
+      customerCode: "TEST",
+      customerName: "Long Text Layout Test",
+      orderDate: "2026-01-01",
+      etaDate: "2026-01-08",
+      lfdDate: "2026-01-12",
+      pickupDate: null,
+      operationMode: "direct_delivery",
+      operationModeLabel: "直送",
+      destination: "FAT2",
+      warehousePoints: null,
+      appointments: [],
+    },
+    {
+      sourceOrderId: "mock-edge-2",
+      containerNumber: "TEST0000003",
+      customerId: "mock-customer",
+      customerCode: "TEST",
+      customerName: "Long Text Layout Test",
+      orderDate: "2026-01-02",
+      etaDate: "2026-01-09",
+      lfdDate: "2026-01-13",
+      pickupDate: null,
+      operationMode: "unload",
+      operationModeLabel: "拆柜",
+      destination: null,
+      warehousePoints: "FAT2, HLI2, MCC1",
+      appointments: [
+        {
+          sourceAppointmentId: "mock-appointment-1",
+          warehousePoint: "FAT2",
+          isaNumber: "ISA-LONG-001",
+          deliveryTime: "2026-01-10 09:00",
+          palletCount: 12,
+        },
+      ],
+    },
+    {
+      sourceOrderId: "mock-edge-3",
+      containerNumber: "TEST0000010",
+      customerId: "mock-customer",
+      customerCode: "TEST",
+      customerName: "Long Text Layout Test",
+      orderDate: "2026-01-03",
+      etaDate: "2026-01-10",
+      lfdDate: "2026-01-14",
+      pickupDate: null,
+      operationMode: "unload",
+      operationModeLabel: "拆柜",
+      destination: null,
+      warehousePoints:
+        "FAT2, HLI2, MCC1, SCK8, BFI3, LGB8, ONT8, GYR3, LAS1, TEB9, 超长中文仓点测试, MIXED-WAREHOUSE-中文-01",
+      appointments: [],
+    },
+    {
+      sourceOrderId: "mock-edge-4",
+      containerNumber: "TESTLONGCODE",
+      customerId: "mock-customer",
+      customerCode: "TEST",
+      customerName: "Long Text Layout Test",
+      orderDate: "2026-01-04",
+      etaDate: "2026-01-11",
+      lfdDate: "2026-01-15",
+      pickupDate: null,
+      operationMode: "direct_delivery",
+      operationModeLabel: "直送",
+      destination:
+        "ULTRA-LONG-WAREHOUSE-CODE-WITHOUT-BREAKS-ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789",
+      warehousePoints: null,
+      appointments: [],
+    },
+    {
+      sourceOrderId: "mock-edge-5",
+      containerNumber: "TESTEMPTY",
+      customerId: "mock-customer",
+      customerCode: "TEST",
+      customerName: "Long Text Layout Test",
+      orderDate: "2026-01-05",
+      etaDate: "2026-01-12",
+      lfdDate: "2026-01-16",
+      pickupDate: "2026-01-13",
+      operationMode: "unload",
+      operationModeLabel: "拆柜",
+      destination: null,
+      warehousePoints: null,
+      appointments: [],
+    },
+    {
+      sourceOrderId: "mock-edge-6",
+      containerNumber: "TESTMIXEDCN",
+      customerId: "mock-customer",
+      customerCode: "TEST",
+      customerName: "中英文混合客户名称 Mixed Customer Name With Extra Words",
+      orderDate: "2026-01-06",
+      etaDate: "2026-01-13",
+      lfdDate: "2026-01-17",
+      pickupDate: null,
+      operationMode: "unload",
+      operationModeLabel: "拆柜",
+      destination: null,
+      warehousePoints: "洛杉矶仓点A, Oakland Warehouse B, 超长中文仓点名称测试C",
+      appointments: [],
+    },
+  ];
+
+  const generatedRows = Array.from({ length: 108 }, (_, index) => {
+    const rowNumber = index + 7;
+    const isUnload = rowNumber % 2 === 0;
+
+    return {
+      sourceOrderId: `mock-generated-${rowNumber}`,
+      containerNumber: `MOCK${String(rowNumber).padStart(7, "0")}`,
+      customerId: "mock-customer",
+      customerCode: "TEST",
+      customerName:
+        rowNumber % 9 === 0
+          ? "Long Customer Name That Should Ellipsize Cleanly In The Table"
+          : "Long Text Layout Test",
+      orderDate: `2026-02-${String((rowNumber % 24) + 1).padStart(2, "0")}`,
+      etaDate: `2026-03-${String((rowNumber % 24) + 1).padStart(2, "0")}`,
+      lfdDate: `2026-03-${String((rowNumber % 24) + 3).padStart(2, "0")}`,
+      pickupDate: rowNumber % 5 === 0 ? `2026-03-20` : null,
+      operationMode: isUnload ? "unload" : "direct_delivery",
+      operationModeLabel: isUnload ? "拆柜" : "直送",
+      destination: isUnload ? null : `DST${rowNumber}, Direct Destination ${rowNumber}`,
+      warehousePoints: isUnload
+        ? `FAT2, HLI2, MOCK${rowNumber}, Warehouse ${rowNumber}`
+        : null,
+      appointments: [],
+    } satisfies ContainerRecord;
+  });
+
+  return [...edgeCases, ...generatedRows].map((container, index) => ({
+    ...container,
+    rowId: createRowId(container, index),
+  }));
+}
