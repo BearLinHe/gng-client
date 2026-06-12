@@ -27,6 +27,7 @@ export type ContainerRecord = {
   destination: string | null;
   warehousePoints: string | null;
   appointments: DeliveryAppointment[];
+  warehouseDetails: WarehouseDetail[];
 };
 
 export type DeliveryAppointment = {
@@ -35,6 +36,33 @@ export type DeliveryAppointment = {
   isaNumber: string | null;
   deliveryTime: string | null;
   palletCount: number | null;
+};
+
+export type WarehouseDetail = {
+  sourceOrderDetailId: string;
+  deliveryNature: string | null;
+  warehousePoint: string;
+  volume: string | null;
+  estimatedPallets: number | null;
+  volumePercentage: string | null;
+  warehouseLocation: string | null;
+  actualPallets: number | null;
+  remainingPallets: number | null;
+  deliveryProgress: string | null;
+  fba: string | null;
+  notes: string | null;
+  po: string | null;
+  appointments: WarehouseAppointment[];
+};
+
+export type WarehouseAppointment = {
+  sourceAppointmentLineId: string;
+  sourceAppointmentId: string | null;
+  appointmentNumber: string | null;
+  deliveryDate: string | null;
+  estimatedPallets: number | null;
+  rejectedPallets: number | null;
+  effectivePallets: number | null;
 };
 
 export type ContainerQueryResult = {
@@ -55,6 +83,10 @@ export type EditableAppointmentField =
   | "isaNumber"
   | "deliveryTime"
   | "palletCount";
+export type EditableWarehouseAppointmentField =
+  | "appointmentNumber"
+  | "deliveryDate"
+  | "effectivePallets";
 export type PickupStatus = "pending" | "picked";
 
 type ContainerRow = {
@@ -71,6 +103,7 @@ type ContainerRow = {
   destination: string | null;
   warehouse_points: string | null;
   appointments: DeliveryAppointmentRow[] | null;
+  warehouse_details: WarehouseDetailRow[] | null;
 };
 
 type DeliveryAppointmentRow = {
@@ -79,6 +112,33 @@ type DeliveryAppointmentRow = {
   isaNumber: string | null;
   deliveryTime: Date | string | null;
   palletCount: number | string | null;
+};
+
+type WarehouseDetailRow = {
+  sourceOrderDetailId: string | null;
+  deliveryNature: string | null;
+  warehousePoint: string | null;
+  volume: string | number | null;
+  estimatedPallets: string | number | null;
+  volumePercentage: string | number | null;
+  warehouseLocation: string | null;
+  actualPallets: string | number | null;
+  remainingPallets: string | number | null;
+  deliveryProgress: string | number | null;
+  fba: string | null;
+  notes: string | null;
+  po: string | null;
+  appointments: WarehouseAppointmentRow[] | null;
+};
+
+type WarehouseAppointmentRow = {
+  sourceAppointmentLineId: string | null;
+  sourceAppointmentId: string | null;
+  appointmentNumber: string | null;
+  deliveryDate: Date | string | null;
+  estimatedPallets: string | number | null;
+  rejectedPallets: string | number | null;
+  effectivePallets: string | number | null;
 };
 
 type CustomerRow = {
@@ -168,6 +228,39 @@ const editableAppointmentColumns: Record<
   palletCount: {
     valueColumn: "manual_pallet_count",
     overrideColumn: "manual_pallet_count_override",
+    cast: "integer",
+  },
+};
+
+const appWarehouseAppointmentColumns: Record<
+  EditableWarehouseAppointmentField,
+  string
+> = {
+  appointmentNumber:
+    "case when pwa.manual_appointment_number_override then pwa.manual_appointment_number else pwa.source_appointment_number end",
+  deliveryDate:
+    "case when pwa.manual_delivery_date_override then pwa.manual_delivery_date else pwa.source_delivery_date end",
+  effectivePallets:
+    "case when pwa.manual_effective_pallets_override then pwa.manual_effective_pallets else pwa.source_effective_pallets end",
+};
+
+const editableWarehouseAppointmentColumns: Record<
+  EditableWarehouseAppointmentField,
+  { valueColumn: string; overrideColumn: string; cast: string }
+> = {
+  appointmentNumber: {
+    valueColumn: "manual_appointment_number",
+    overrideColumn: "manual_appointment_number_override",
+    cast: "text",
+  },
+  deliveryDate: {
+    valueColumn: "manual_delivery_date",
+    overrideColumn: "manual_delivery_date_override",
+    cast: "timestamptz",
+  },
+  effectivePallets: {
+    valueColumn: "manual_effective_pallets",
+    overrideColumn: "manual_effective_pallets_override",
     cast: "integer",
   },
 };
@@ -386,6 +479,26 @@ export async function getContainers({
       or coalesce(pc.manual_destination, pc.source_destination, '') ilike $${params.length}
       or coalesce(c.code, '') ilike $${params.length}
       or coalesce(c.name, '') ilike $${params.length}
+      or exists (
+        select 1
+        from public.portal_warehouse_details pwd_search
+        where pwd_search.source_order_id = pc.source_order_id
+          and pwd_search.source_active = true
+          and (
+            coalesce(pwd_search.source_warehouse_point, '') ilike $${params.length}
+            or coalesce(pwd_search.source_warehouse_location, '') ilike $${params.length}
+            or coalesce(pwd_search.source_fba, '') ilike $${params.length}
+            or coalesce(pwd_search.source_notes, '') ilike $${params.length}
+            or coalesce(pwd_search.source_po, '') ilike $${params.length}
+          )
+      )
+      or exists (
+        select 1
+        from public.portal_warehouse_appointments pwa_search
+        where pwa_search.source_order_id = pc.source_order_id
+          and pwa_search.source_active = true
+          and coalesce(pwa_search.manual_appointment_number, pwa_search.source_appointment_number, '') ilike $${params.length}
+      )
     )`);
   }
 
@@ -464,7 +577,8 @@ export async function getContainers({
           coalesce(pc.manual_operation_mode, pc.source_operation_mode) as operation_mode,
           coalesce(pc.manual_destination, pc.source_destination) as destination,
           coalesce(pc.manual_warehouse_points, pc.source_warehouse_points) as warehouse_points,
-          coalesce(appointment_points.appointments, '[]'::jsonb) as appointments
+          coalesce(appointment_points.appointments, '[]'::jsonb) as appointments,
+          coalesce(warehouse_detail_points.warehouse_details, '[]'::jsonb) as warehouse_details
         from public.portal_containers pc
         left join public.portal_customers c
           on c.source_customer_id = pc.source_customer_id
@@ -486,6 +600,53 @@ export async function getContainers({
           where pda.source_order_id = pc.source_order_id
             and pda.source_active = true
         ) appointment_points on true
+        left join lateral (
+          select jsonb_agg(
+            jsonb_build_object(
+              'sourceOrderDetailId', pwd.source_order_detail_id,
+              'deliveryNature', pwd.source_delivery_nature,
+              'warehousePoint', pwd.source_warehouse_point,
+              'volume', pwd.source_volume,
+              'estimatedPallets', pwd.source_estimated_pallets,
+              'volumePercentage', pwd.source_volume_percentage,
+              'warehouseLocation', pwd.source_warehouse_location,
+              'actualPallets', pwd.source_actual_pallets,
+              'remainingPallets', pwd.source_remaining_pallets,
+              'deliveryProgress', pwd.source_delivery_progress,
+              'fba', pwd.source_fba,
+              'notes', pwd.source_notes,
+              'po', pwd.source_po,
+              'appointments', coalesce(warehouse_appointments.appointments, '[]'::jsonb)
+            )
+            order by
+              pwd.source_warehouse_point asc nulls last,
+              pwd.source_order_detail_id asc
+          ) as warehouse_details
+          from public.portal_warehouse_details pwd
+          left join lateral (
+            select jsonb_agg(
+              jsonb_build_object(
+                'sourceAppointmentLineId', pwa.source_appointment_line_id,
+                'sourceAppointmentId', pwa.source_appointment_id,
+                'appointmentNumber', ${appWarehouseAppointmentColumns.appointmentNumber},
+                'deliveryDate', ${appWarehouseAppointmentColumns.deliveryDate},
+                'estimatedPallets', pwa.source_estimated_pallets,
+                'rejectedPallets', pwa.source_rejected_pallets,
+                'effectivePallets', ${appWarehouseAppointmentColumns.effectivePallets}
+              )
+              order by
+                ${appWarehouseAppointmentColumns.deliveryDate} asc nulls last,
+                ${appWarehouseAppointmentColumns.appointmentNumber} asc nulls last,
+                pwa.source_appointment_line_id asc
+            ) as appointments
+            from public.portal_warehouse_appointments pwa
+            where pwa.source_order_id = pc.source_order_id
+              and pwa.source_order_detail_id = pwd.source_order_detail_id
+              and pwa.source_active = true
+          ) warehouse_appointments on true
+          where pwd.source_order_id = pc.source_order_id
+            and pwd.source_active = true
+        ) warehouse_detail_points on true
         ${dataWhereClause}
         order by
           ${appDateFilterColumns.orderDate} desc nulls last,
@@ -604,6 +765,64 @@ export async function updateAppointmentDetail({
     if (!updated) return null;
 
     return toDeliveryAppointment(updated);
+  });
+}
+
+export async function updateWarehouseAppointmentDetail({
+  customerId,
+  sourceOrderId,
+  sourceOrderDetailId,
+  sourceAppointmentLineId,
+  field,
+  value,
+}: {
+  customerId: string;
+  sourceOrderId: string;
+  sourceOrderDetailId: string;
+  sourceAppointmentLineId: string;
+  field: EditableWarehouseAppointmentField;
+  value: string | null;
+}): Promise<WarehouseAppointment | null> {
+  const column = editableWarehouseAppointmentColumns[field];
+  const normalizedValue = normalizeWarehouseAppointmentValue(field, value);
+
+  return withAppTransaction(async (client) => {
+    const result = await client.query<WarehouseAppointmentRow>(
+      `
+        update public.portal_warehouse_appointments pwa
+        set ${column.valueColumn} = $5::${column.cast},
+            ${column.overrideColumn} = true,
+            updated_at = now()
+        from public.portal_containers pc
+        where pwa.source_order_id = pc.source_order_id
+          and pwa.source_order_id = $1
+          and pwa.source_order_detail_id = $2
+          and pwa.source_appointment_line_id = $3
+          and pc.source_customer_id = $4
+          and pwa.source_active = true
+          and pc.source_active = true
+        returning
+          pwa.source_appointment_line_id as "sourceAppointmentLineId",
+          pwa.source_appointment_id as "sourceAppointmentId",
+          ${appWarehouseAppointmentColumns.appointmentNumber} as "appointmentNumber",
+          ${appWarehouseAppointmentColumns.deliveryDate} as "deliveryDate",
+          pwa.source_estimated_pallets as "estimatedPallets",
+          pwa.source_rejected_pallets as "rejectedPallets",
+          ${appWarehouseAppointmentColumns.effectivePallets} as "effectivePallets"
+      `,
+      [
+        sourceOrderId,
+        sourceOrderDetailId,
+        sourceAppointmentLineId,
+        customerId,
+        normalizedValue,
+      ],
+    );
+    const updated = rows(result)[0];
+
+    if (!updated) return null;
+
+    return toWarehouseAppointment(updated);
   });
 }
 
@@ -756,7 +975,8 @@ export async function getSourceContainers({
             nullif(o.delivery_location, '')
           ) as destination,
           detail_points.warehouse_points,
-          appointment_points.appointments
+          appointment_points.appointments,
+          null::jsonb as warehouse_details
         ${baseFrom}
           ${dataWhereClause}
         order by
@@ -783,6 +1003,12 @@ export async function getSourceContainers({
 }
 
 function toContainerRecord(row: ContainerRow): ContainerRecord {
+  const appointments = (row.appointments ?? []).map(toDeliveryAppointment);
+  const warehouseDetails = buildWarehouseDetails(
+    (row.warehouse_details ?? []).map(toWarehouseDetail),
+    appointments,
+  );
+
   return {
     sourceOrderId: row.source_order_id,
     containerNumber: row.container_number,
@@ -797,7 +1023,8 @@ function toContainerRecord(row: ContainerRow): ContainerRecord {
     operationModeLabel: formatOperationMode(row.operation_mode),
     destination: row.destination,
     warehousePoints: row.warehouse_points,
-    appointments: (row.appointments ?? []).map(toDeliveryAppointment),
+    appointments,
+    warehouseDetails,
   };
 }
 
@@ -812,6 +1039,221 @@ function toDeliveryAppointment(
     palletCount:
       appointment.palletCount === null ? null : Number(appointment.palletCount),
   };
+}
+
+function toWarehouseDetail(detail: WarehouseDetailRow): WarehouseDetail {
+  return {
+    sourceOrderDetailId: detail.sourceOrderDetailId ?? "",
+    deliveryNature: detail.deliveryNature,
+    warehousePoint: detail.warehousePoint ?? "未设置仓点",
+    volume: formatDecimal(detail.volume),
+    estimatedPallets: toNullableNumber(detail.estimatedPallets),
+    volumePercentage: formatDecimal(detail.volumePercentage),
+    warehouseLocation: detail.warehouseLocation,
+    actualPallets: toNullableNumber(detail.actualPallets),
+    remainingPallets: toNullableNumber(detail.remainingPallets),
+    deliveryProgress: formatDecimal(detail.deliveryProgress),
+    fba: detail.fba,
+    notes: detail.notes,
+    po: detail.po,
+    appointments: (detail.appointments ?? []).map(toWarehouseAppointment),
+  };
+}
+
+function toWarehouseAppointment(
+  appointment: WarehouseAppointmentRow,
+): WarehouseAppointment {
+  return {
+    sourceAppointmentLineId: appointment.sourceAppointmentLineId ?? "",
+    sourceAppointmentId: appointment.sourceAppointmentId,
+    appointmentNumber: appointment.appointmentNumber,
+    deliveryDate: formatDate(appointment.deliveryDate),
+    estimatedPallets: toNullableNumber(appointment.estimatedPallets),
+    rejectedPallets: toNullableNumber(appointment.rejectedPallets),
+    effectivePallets: toNullableNumber(appointment.effectivePallets),
+  };
+}
+
+function buildWarehouseDetails(
+  details: WarehouseDetail[],
+  appointments: DeliveryAppointment[],
+): WarehouseDetail[] {
+  const appointmentById = new Map(
+    appointments.map((appointment) => [
+      appointment.sourceAppointmentId,
+      appointment,
+    ]),
+  );
+  const groupedDetails = new Map<string, WarehouseDetail>();
+  const existingAppointmentIds = new Set<string>();
+
+  for (const detail of details) {
+    const detailAppointments = detail.appointments.map((appointment) => {
+      if (appointment.sourceAppointmentId) {
+        existingAppointmentIds.add(appointment.sourceAppointmentId);
+      }
+      return appointment;
+    });
+    const fallbackPoint = detailAppointments
+      .map((appointment) =>
+        appointment.sourceAppointmentId
+          ? appointmentById.get(appointment.sourceAppointmentId)?.warehousePoint
+          : null,
+      )
+      .find((warehousePoint) => isMeaningfulWarehousePoint(warehousePoint));
+    const warehousePoint = isMeaningfulWarehousePoint(detail.warehousePoint)
+      ? detail.warehousePoint
+      : fallbackPoint || "未设置仓点";
+    const key = warehousePoint.toLowerCase();
+    const existing = groupedDetails.get(key);
+    const normalizedDetail = {
+      ...detail,
+      warehousePoint,
+      appointments: detailAppointments,
+    };
+
+    if (!existing) {
+      groupedDetails.set(key, normalizedDetail);
+      continue;
+    }
+
+    groupedDetails.set(key, mergeWarehouseDetails(existing, normalizedDetail));
+  }
+
+  for (const appointment of appointments) {
+    if (existingAppointmentIds.has(appointment.sourceAppointmentId)) continue;
+    if (!isMeaningfulWarehousePoint(appointment.warehousePoint)) continue;
+
+    const warehousePoint = appointment.warehousePoint;
+    const key = warehousePoint.toLowerCase();
+    const warehouseAppointment = legacyAppointmentToWarehouseAppointment(
+      appointment,
+    );
+    const existing = groupedDetails.get(key);
+
+    if (!existing) {
+      groupedDetails.set(key, {
+        sourceOrderDetailId: `legacy:${appointment.sourceAppointmentId}`,
+        deliveryNature: null,
+        warehousePoint,
+        volume: null,
+        estimatedPallets: appointment.palletCount,
+        volumePercentage: null,
+        warehouseLocation: null,
+        actualPallets: appointment.palletCount,
+        remainingPallets: null,
+        deliveryProgress: null,
+        fba: null,
+        notes: null,
+        po: null,
+        appointments: [warehouseAppointment],
+      });
+      continue;
+    }
+
+    groupedDetails.set(key, {
+      ...existing,
+      appointments: [...existing.appointments, warehouseAppointment],
+    });
+  }
+
+  return [...groupedDetails.values()].map((detail) => ({
+    ...detail,
+    appointments: detail.appointments.sort(compareWarehouseAppointments),
+  }));
+}
+
+function mergeWarehouseDetails(
+  current: WarehouseDetail,
+  next: WarehouseDetail,
+): WarehouseDetail {
+  return {
+    ...current,
+    sourceOrderDetailId: `${current.sourceOrderDetailId},${next.sourceOrderDetailId}`,
+    deliveryNature: mergeText(current.deliveryNature, next.deliveryNature),
+    volume: sumDecimalStrings(current.volume, next.volume),
+    estimatedPallets: sumNullable(
+      current.estimatedPallets,
+      next.estimatedPallets,
+    ),
+    volumePercentage: sumDecimalStrings(
+      current.volumePercentage,
+      next.volumePercentage,
+    ),
+    warehouseLocation: mergeText(
+      current.warehouseLocation,
+      next.warehouseLocation,
+    ),
+    actualPallets: sumNullable(current.actualPallets, next.actualPallets),
+    remainingPallets: sumNullable(
+      current.remainingPallets,
+      next.remainingPallets,
+    ),
+    deliveryProgress: current.deliveryProgress ?? next.deliveryProgress,
+    fba: mergeText(current.fba, next.fba),
+    notes: mergeText(current.notes, next.notes),
+    po: mergeText(current.po, next.po),
+    appointments: [...current.appointments, ...next.appointments],
+  };
+}
+
+function legacyAppointmentToWarehouseAppointment(
+  appointment: DeliveryAppointment,
+): WarehouseAppointment {
+  return {
+    sourceAppointmentLineId: `legacy:${appointment.sourceAppointmentId}`,
+    sourceAppointmentId: appointment.sourceAppointmentId,
+    appointmentNumber: appointment.isaNumber,
+    deliveryDate: appointment.deliveryTime?.slice(0, 10) ?? null,
+    estimatedPallets: appointment.palletCount,
+    rejectedPallets: 0,
+    effectivePallets: appointment.palletCount,
+  };
+}
+
+function compareWarehouseAppointments(
+  left: WarehouseAppointment,
+  right: WarehouseAppointment,
+) {
+  return (
+    (left.deliveryDate ?? "").localeCompare(right.deliveryDate ?? "") ||
+    (left.appointmentNumber ?? "").localeCompare(right.appointmentNumber ?? "")
+  );
+}
+
+function isMeaningfulWarehousePoint(value: string | null | undefined): value is string {
+  return Boolean(value && value.trim() && value !== "未设置仓点");
+}
+
+function sumNullable(
+  left: number | null,
+  right: number | null,
+): number | null {
+  if (left === null && right === null) return null;
+  return (left ?? 0) + (right ?? 0);
+}
+
+function sumDecimalStrings(
+  left: string | null,
+  right: string | null,
+): string | null {
+  if (!left && !right) return null;
+  const leftValue = left ? Number(left.replace(/,/g, "")) : 0;
+  const rightValue = right ? Number(right.replace(/,/g, "")) : 0;
+  if (Number.isNaN(leftValue) || Number.isNaN(rightValue)) {
+    return mergeText(left, right);
+  }
+
+  return formatDecimal(leftValue + rightValue);
+}
+
+function mergeText(left: string | null, right: string | null): string | null {
+  const values = [left, right]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value && value !== "—"));
+  if (!values.length) return null;
+
+  return [...new Set(values)].join(", ");
 }
 
 function formatOperationMode(value: string | null): string {
@@ -831,6 +1273,23 @@ function formatDate(value: Date | string | null): string | null {
     month: "2-digit",
     day: "2-digit",
   }).format(date);
+}
+
+function formatDecimal(value: string | number | null): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  const numberValue = Number(value);
+  if (Number.isNaN(numberValue)) return String(value);
+
+  return new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 0,
+  }).format(numberValue);
+}
+
+function toNullableNumber(value: string | number | null): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const numberValue = Number(value);
+  return Number.isNaN(numberValue) ? null : numberValue;
 }
 
 function isDateInput(value: string | null | undefined): value is string {
@@ -875,6 +1334,33 @@ function normalizeAppointmentValue(
     if (Number.isNaN(parsed.getTime())) throw new Error("INVALID_DATETIME");
 
     return `${match[1]} ${match[2]}:00+00`;
+  }
+
+  return normalized || null;
+}
+
+function normalizeWarehouseAppointmentValue(
+  field: EditableWarehouseAppointmentField,
+  value: string | null | undefined,
+): string | number | null {
+  const normalized = value?.trim() ?? "";
+
+  if (field === "effectivePallets") {
+    if (!normalized) return null;
+    if (!/^\d+$/.test(normalized)) throw new Error("INVALID_PALLET_COUNT");
+    return Number(normalized);
+  }
+
+  if (field === "deliveryDate") {
+    if (!normalized) return null;
+    if (!isDateInput(normalized)) throw new Error("INVALID_DATE");
+
+    const parsed = new Date(`${normalized}T00:00:00Z`);
+    if (Number.isNaN(parsed.getTime()) || formatDate(parsed) !== normalized) {
+      throw new Error("INVALID_DATE");
+    }
+
+    return `${normalized} 00:00:00+00`;
   }
 
   return normalized || null;

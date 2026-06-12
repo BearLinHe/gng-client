@@ -67,6 +67,7 @@ type ContainerRecord = {
   destination: string | null;
   warehousePoints: string | null;
   appointments: DeliveryAppointment[];
+  warehouseDetails: WarehouseDetail[];
 };
 
 type TableContainerRecord = ContainerRecord & {
@@ -80,6 +81,10 @@ type EditableAppointmentField =
   | "isaNumber"
   | "deliveryTime"
   | "palletCount";
+type EditableWarehouseAppointmentField =
+  | "appointmentNumber"
+  | "deliveryDate"
+  | "effectivePallets";
 type PickupStatus = "all" | "pending" | "picked";
 
 type DeliveryAppointment = {
@@ -88,6 +93,33 @@ type DeliveryAppointment = {
   isaNumber: string | null;
   deliveryTime: string | null;
   palletCount: number | null;
+};
+
+type WarehouseDetail = {
+  sourceOrderDetailId: string;
+  deliveryNature: string | null;
+  warehousePoint: string;
+  volume: string | null;
+  estimatedPallets: number | null;
+  volumePercentage: string | null;
+  warehouseLocation: string | null;
+  actualPallets: number | null;
+  remainingPallets: number | null;
+  deliveryProgress: string | null;
+  fba: string | null;
+  notes: string | null;
+  po: string | null;
+  appointments: WarehouseAppointment[];
+};
+
+type WarehouseAppointment = {
+  sourceAppointmentLineId: string;
+  sourceAppointmentId: string | null;
+  appointmentNumber: string | null;
+  deliveryDate: string | null;
+  estimatedPallets: number | null;
+  rejectedPallets: number | null;
+  effectivePallets: number | null;
 };
 
 type ContainerPayload = {
@@ -140,6 +172,9 @@ export default function ContainerDashboard() {
   const [expandedContainers, setExpandedContainers] = useState<Set<string>>(
     () => new Set(),
   );
+  const [expandedWarehouseDetails, setExpandedWarehouseDetails] = useState<
+    Set<string>
+  >(() => new Set());
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
   const [draggedRowId, setDraggedRowId] = useState<string | null>(null);
@@ -160,8 +195,9 @@ export default function ContainerDashboard() {
   );
   const [editingAppointmentCell, setEditingAppointmentCell] = useState<{
     rowId: string;
-    sourceAppointmentId: string;
-    field: EditableAppointmentField;
+    sourceOrderDetailId: string;
+    sourceAppointmentLineId: string;
+    field: EditableWarehouseAppointmentField;
   } | null>(null);
   const [appointmentDraft, setAppointmentDraft] = useState("");
   const [savingAppointmentCells, setSavingAppointmentCells] = useState<
@@ -284,6 +320,7 @@ export default function ContainerDashboard() {
       setPendingPickup(payload.pendingPickup);
       setPickedUp(payload.pickedUp);
       setExpandedContainers(new Set());
+      setExpandedWarehouseDetails(new Set());
       setSorting([]);
       setDraggedRowId(null);
       setDragOverRowId(null);
@@ -331,6 +368,7 @@ export default function ContainerDashboard() {
         setPendingPickup(payload.pendingPickup);
         setPickedUp(payload.pickedUp);
         setExpandedContainers(new Set());
+        setExpandedWarehouseDetails(new Set());
         setSorting([]);
         setDraggedRowId(null);
         setDragOverRowId(null);
@@ -623,19 +661,22 @@ export default function ContainerDashboard() {
 
   function startAppointmentEdit(
     container: TableContainerRecord,
-    appointment: DeliveryAppointment,
-    field: EditableAppointmentField,
+    warehouseDetail: WarehouseDetail,
+    appointment: WarehouseAppointment,
+    field: EditableWarehouseAppointmentField,
   ) {
     const key = getAppointmentCellKey(
       container.rowId,
-      appointment.sourceAppointmentId,
+      warehouseDetail.sourceOrderDetailId,
+      appointment.sourceAppointmentLineId,
       field,
     );
     if (savingAppointmentKeysRef.current.has(key)) return;
 
     setEditingAppointmentCell({
       rowId: container.rowId,
-      sourceAppointmentId: appointment.sourceAppointmentId,
+      sourceOrderDetailId: warehouseDetail.sourceOrderDetailId,
+      sourceAppointmentLineId: appointment.sourceAppointmentLineId,
       field,
     });
     setAppointmentDraft(getAppointmentDraftValue(appointment, field));
@@ -653,13 +694,15 @@ export default function ContainerDashboard() {
 
   async function commitAppointmentEdit(
     container: TableContainerRecord,
-    appointment: DeliveryAppointment,
-    field: EditableAppointmentField,
+    warehouseDetail: WarehouseDetail,
+    appointment: WarehouseAppointment,
+    field: EditableWarehouseAppointmentField,
     value = appointmentDraft,
   ) {
     const key = getAppointmentCellKey(
       container.rowId,
-      appointment.sourceAppointmentId,
+      warehouseDetail.sourceOrderDetailId,
+      appointment.sourceAppointmentLineId,
       field,
     );
     if (savingAppointmentKeysRef.current.has(key)) return;
@@ -685,10 +728,15 @@ export default function ContainerDashboard() {
     markAppointmentCellSaving(key);
 
     if (mockLongTable) {
-      applyUpdatedAppointment(container, appointment.sourceAppointmentId, {
+      applyUpdatedAppointment(
+        container,
+        warehouseDetail.sourceOrderDetailId,
+        appointment.sourceAppointmentLineId,
+        {
         ...appointment,
         [field]: coerceAppointmentValue(field, nextValue),
-      });
+        },
+      );
       clearAppointmentCellSaving(key);
       return;
     }
@@ -704,32 +752,54 @@ export default function ContainerDashboard() {
         }));
       }, 10000);
       savingAppointmentTimeoutsRef.current.set(key, timeoutId);
+      const isLegacyAppointment =
+        appointment.sourceAppointmentLineId.startsWith("legacy:");
+      const requestBody = isLegacyAppointment
+        ? {
+            kind: "appointment",
+            sourceOrderId: container.sourceOrderId,
+            sourceAppointmentId: appointment.sourceAppointmentId,
+            field: mapLegacyAppointmentField(field),
+            value:
+              field === "deliveryDate" && nextValue
+                ? `${nextValue} 00:00`
+                : nextValue || null,
+          }
+        : {
+            kind: "warehouseAppointment",
+            sourceOrderId: container.sourceOrderId,
+            sourceOrderDetailId: warehouseDetail.sourceOrderDetailId,
+            sourceAppointmentLineId: appointment.sourceAppointmentLineId,
+            field,
+            value: nextValue || null,
+          };
 
       const response = await fetch("/api/containers", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         signal: controller.signal,
-        body: JSON.stringify({
-          kind: "appointment",
-          sourceOrderId: container.sourceOrderId,
-          sourceAppointmentId: appointment.sourceAppointmentId,
-          field,
-          value: nextValue || null,
-        }),
+        body: JSON.stringify(requestBody),
       });
       const payload = (await response.json()) as {
+        warehouseAppointment?: WarehouseAppointment;
         appointment?: DeliveryAppointment;
         error?: string;
       };
+      const updatedAppointment =
+        payload.warehouseAppointment ??
+        (payload.appointment
+          ? legacyAppointmentToWarehouseAppointment(payload.appointment)
+          : null);
 
-      if (!response.ok || !payload.appointment) {
+      if (!response.ok || !updatedAppointment) {
         throw new Error(payload.error ?? "保存失败");
       }
 
       applyUpdatedAppointment(
         container,
-        appointment.sourceAppointmentId,
-        payload.appointment,
+        warehouseDetail.sourceOrderDetailId,
+        appointment.sourceAppointmentLineId,
+        updatedAppointment,
       );
     } catch (saveError) {
       if (saveError instanceof DOMException && saveError.name === "AbortError") {
@@ -747,18 +817,27 @@ export default function ContainerDashboard() {
 
   function applyUpdatedAppointment(
     original: TableContainerRecord,
-    sourceAppointmentId: string,
-    updatedAppointment: DeliveryAppointment,
+    sourceOrderDetailId: string,
+    sourceAppointmentLineId: string,
+    updatedAppointment: WarehouseAppointment,
   ) {
     setContainers((current) =>
       current.map((row) =>
         row.rowId === original.rowId
           ? {
               ...row,
-              appointments: row.appointments.map((appointment) =>
-                appointment.sourceAppointmentId === sourceAppointmentId
-                  ? updatedAppointment
-                  : appointment,
+              warehouseDetails: row.warehouseDetails.map((detail) =>
+                detail.sourceOrderDetailId === sourceOrderDetailId
+                  ? {
+                      ...detail,
+                      appointments: detail.appointments.map((appointment) =>
+                        appointment.sourceAppointmentLineId ===
+                        sourceAppointmentLineId
+                          ? updatedAppointment
+                          : appointment,
+                      ),
+                    }
+                  : detail,
               ),
             }
           : row,
@@ -1055,8 +1134,28 @@ export default function ContainerDashboard() {
       const next = new Set(current);
       if (next.has(rowId)) {
         next.delete(rowId);
+        setExpandedWarehouseDetails((details) => {
+          const detailNext = new Set(details);
+          for (const key of detailNext) {
+            if (key.startsWith(`${rowId}:`)) detailNext.delete(key);
+          }
+          return detailNext;
+        });
       } else {
         next.add(rowId);
+      }
+      return next;
+    });
+  }
+
+  function toggleWarehouseDetail(rowId: string, sourceOrderDetailId: string) {
+    const key = getWarehouseDetailKey(rowId, sourceOrderDetailId);
+    setExpandedWarehouseDetails((current) => {
+      const next = new Set(current);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
       }
       return next;
     });
@@ -1288,6 +1387,8 @@ export default function ContainerDashboard() {
     await fetch("/api/auth/logout", { method: "POST" });
     setCustomer(null);
     setContainers([]);
+    setExpandedContainers(new Set());
+    setExpandedWarehouseDetails(new Set());
     setTotalCount(0);
     setAllContainers(0);
     setPendingPickup(0);
@@ -1775,232 +1876,363 @@ export default function ContainerDashboard() {
                     {isExpanded ? (
                       <tr className="detailsRow">
                         <td colSpan={visibleColumnCount}>
-                          <div className="detailsPanel">
-                            <div className="detailsTitle">送货预约信息</div>
-                            {container.appointments.length ? (
-                              <table className="appointmentTable">
+                          <div className="detailsPanel warehouseDetailsPanel">
+                            <div className="detailsHeaderRow">
+                              <div className="detailsTitle">仓点明细</div>
+                              <span>
+                                {container.warehouseDetails.length
+                                  ? `${container.warehouseDetails.length} 个仓点`
+                                  : "暂无仓点"}
+                              </span>
+                            </div>
+                            {container.warehouseDetails.length ? (
+                              <table className="warehouseDetailTable">
                                 <thead>
                                   <tr>
-                                    <th>仓点</th>
-                                    <th>ISA Number</th>
-                                    <th>送货时间</th>
-                                    <th>排车板数</th>
+                                    <th aria-label="展开送仓预约" />
+                                    <th>性质</th>
+                                    <th>送仓地点</th>
+                                    <th>体积</th>
+                                    <th>预计板数</th>
+                                    <th>分仓占比</th>
+                                    <th>仓库位置</th>
+                                    <th>实际板数</th>
+                                    <th>剩余板数</th>
+                                    <th>送货进度</th>
+                                    <th>FBA</th>
+                                    <th>备注</th>
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {container.appointments.map(
-                                    (appointment, appointmentIndex) => (
-                                      <tr
-                                        key={`${appointment.sourceAppointmentId}-${appointmentIndex}`}
-                                      >
-                                        <td>
-                                          <EditableAppointmentCell
-                                            appointment={appointment}
-                                            container={container}
-                                            draft={appointmentDraft}
-                                            error={
-                                              appointmentCellErrors[
-                                                getAppointmentCellKey(
+                                  {container.warehouseDetails.map((detail) => {
+                                    const detailKey = getWarehouseDetailKey(
+                                      container.rowId,
+                                      detail.sourceOrderDetailId,
+                                    );
+                                    const isDetailExpanded =
+                                      expandedWarehouseDetails.has(detailKey);
+
+                                    return (
+                                      <Fragment key={detailKey}>
+                                        <tr className="warehouseDetailRow">
+                                          <td>
+                                            <button
+                                              type="button"
+                                              className="tableIconButton expandIconButton"
+                                              aria-expanded={isDetailExpanded}
+                                              aria-label={
+                                                isDetailExpanded
+                                                  ? "收起送仓预约"
+                                                  : "展开送仓预约"
+                                              }
+                                              onClick={() =>
+                                                toggleWarehouseDetail(
                                                   container.rowId,
-                                                  appointment.sourceAppointmentId,
-                                                  "warehousePoint",
+                                                  detail.sourceOrderDetailId,
                                                 )
-                                              ]
-                                            }
-                                            field="warehousePoint"
-                                            isEditing={
-                                              isEditingAppointmentCell(
-                                                editingAppointmentCell,
-                                                container.rowId,
-                                                appointment.sourceAppointmentId,
-                                                "warehousePoint",
-                                              )
-                                            }
-                                            isSaving={savingAppointmentCells.has(
-                                              getAppointmentCellKey(
-                                                container.rowId,
-                                                appointment.sourceAppointmentId,
-                                                "warehousePoint",
-                                              ),
+                                              }
+                                            >
+                                              <ChevronRight
+                                                className={
+                                                  isDetailExpanded
+                                                    ? "chevronIcon expanded"
+                                                    : "chevronIcon"
+                                                }
+                                                size={15}
+                                                aria-hidden="true"
+                                              />
+                                            </button>
+                                          </td>
+                                          <td>{valueOrDash(detail.deliveryNature)}</td>
+                                          <td>
+                                            <TruncatedText
+                                              text={detail.warehousePoint}
+                                            />
+                                          </td>
+                                          <td>{valueOrDash(detail.volume)}</td>
+                                          <td>{numberOrDash(detail.estimatedPallets)}</td>
+                                          <td>
+                                            {formatPercentValue(
+                                              detail.volumePercentage,
                                             )}
-                                            onCancel={cancelAppointmentEdit}
-                                            onCommit={(value) =>
-                                              commitAppointmentEdit(
-                                                container,
-                                                appointment,
-                                                "warehousePoint",
-                                                value,
-                                              )
-                                            }
-                                            onDraftChange={setAppointmentDraft}
-                                            readOnly={!isAdmin}
-                                            onStart={() =>
-                                              startAppointmentEdit(
-                                                container,
-                                                appointment,
-                                                "warehousePoint",
-                                              )
-                                            }
-                                          />
-                                        </td>
-                                        <td>
-                                          <EditableAppointmentCell
-                                            appointment={appointment}
-                                            container={container}
-                                            draft={appointmentDraft}
-                                            error={
-                                              appointmentCellErrors[
-                                                getAppointmentCellKey(
-                                                  container.rowId,
-                                                  appointment.sourceAppointmentId,
-                                                  "isaNumber",
-                                                )
-                                              ]
-                                            }
-                                            field="isaNumber"
-                                            isEditing={
-                                              isEditingAppointmentCell(
-                                                editingAppointmentCell,
-                                                container.rowId,
-                                                appointment.sourceAppointmentId,
-                                                "isaNumber",
-                                              )
-                                            }
-                                            isSaving={savingAppointmentCells.has(
-                                              getAppointmentCellKey(
-                                                container.rowId,
-                                                appointment.sourceAppointmentId,
-                                                "isaNumber",
-                                              ),
+                                          </td>
+                                          <td>
+                                            <TruncatedText
+                                              text={detail.warehouseLocation}
+                                            />
+                                          </td>
+                                          <td>{numberOrDash(detail.actualPallets)}</td>
+                                          <td>{numberOrDash(detail.remainingPallets)}</td>
+                                          <td>
+                                            {formatPercentValue(
+                                              detail.deliveryProgress,
                                             )}
-                                            onCancel={cancelAppointmentEdit}
-                                            onCommit={(value) =>
-                                              commitAppointmentEdit(
-                                                container,
-                                                appointment,
-                                                "isaNumber",
-                                                value,
-                                              )
-                                            }
-                                            onDraftChange={setAppointmentDraft}
-                                            readOnly={!isAdmin}
-                                            onStart={() =>
-                                              startAppointmentEdit(
-                                                container,
-                                                appointment,
-                                                "isaNumber",
-                                              )
-                                            }
-                                          />
-                                        </td>
-                                        <td>
-                                          <EditableAppointmentCell
-                                            appointment={appointment}
-                                            container={container}
-                                            draft={appointmentDraft}
-                                            error={
-                                              appointmentCellErrors[
-                                                getAppointmentCellKey(
-                                                  container.rowId,
-                                                  appointment.sourceAppointmentId,
-                                                  "deliveryTime",
-                                                )
-                                              ]
-                                            }
-                                            field="deliveryTime"
-                                            isEditing={
-                                              isEditingAppointmentCell(
-                                                editingAppointmentCell,
-                                                container.rowId,
-                                                appointment.sourceAppointmentId,
-                                                "deliveryTime",
-                                              )
-                                            }
-                                            isSaving={savingAppointmentCells.has(
-                                              getAppointmentCellKey(
-                                                container.rowId,
-                                                appointment.sourceAppointmentId,
-                                                "deliveryTime",
-                                              ),
-                                            )}
-                                            onCancel={cancelAppointmentEdit}
-                                            onCommit={(value) =>
-                                              commitAppointmentEdit(
-                                                container,
-                                                appointment,
-                                                "deliveryTime",
-                                                value,
-                                              )
-                                            }
-                                            onDraftChange={setAppointmentDraft}
-                                            readOnly={!isAdmin}
-                                            onStart={() =>
-                                              startAppointmentEdit(
-                                                container,
-                                                appointment,
-                                                "deliveryTime",
-                                              )
-                                            }
-                                          />
-                                        </td>
-                                        <td>
-                                          <EditableAppointmentCell
-                                            appointment={appointment}
-                                            container={container}
-                                            draft={appointmentDraft}
-                                            error={
-                                              appointmentCellErrors[
-                                                getAppointmentCellKey(
-                                                  container.rowId,
-                                                  appointment.sourceAppointmentId,
-                                                  "palletCount",
-                                                )
-                                              ]
-                                            }
-                                            field="palletCount"
-                                            isEditing={
-                                              isEditingAppointmentCell(
-                                                editingAppointmentCell,
-                                                container.rowId,
-                                                appointment.sourceAppointmentId,
-                                                "palletCount",
-                                              )
-                                            }
-                                            isSaving={savingAppointmentCells.has(
-                                              getAppointmentCellKey(
-                                                container.rowId,
-                                                appointment.sourceAppointmentId,
-                                                "palletCount",
-                                              ),
-                                            )}
-                                            onCancel={cancelAppointmentEdit}
-                                            onCommit={(value) =>
-                                              commitAppointmentEdit(
-                                                container,
-                                                appointment,
-                                                "palletCount",
-                                                value,
-                                              )
-                                            }
-                                            onDraftChange={setAppointmentDraft}
-                                            readOnly={!isAdmin}
-                                            onStart={() =>
-                                              startAppointmentEdit(
-                                                container,
-                                                appointment,
-                                                "palletCount",
-                                              )
-                                            }
-                                          />
-                                        </td>
-                                      </tr>
-                                    ),
-                                  )}
+                                          </td>
+                                          <td>
+                                            <TruncatedText text={detail.fba} />
+                                          </td>
+                                          <td>
+                                            <TruncatedText text={detail.notes} />
+                                          </td>
+                                        </tr>
+                                        {isDetailExpanded ? (
+                                          <tr className="warehouseAppointmentRow">
+                                            <td colSpan={12}>
+                                              <div className="warehouseAppointmentPanel">
+                                                <div className="appointmentTitle">
+                                                  送仓预约 ({detail.appointments.length})
+                                                </div>
+                                                {detail.appointments.length ? (
+                                                  <table className="appointmentTable warehouseAppointmentTable">
+                                                    <thead>
+                                                      <tr>
+                                                        <th>送仓预约</th>
+                                                        <th>预约号码</th>
+                                                        <th>送仓日</th>
+                                                        <th>预计板数</th>
+                                                        <th>拒收板数</th>
+                                                        <th>有效板数</th>
+                                                      </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                      {detail.appointments.map(
+                                                        (
+                                                          appointment,
+                                                          appointmentIndex,
+                                                        ) => (
+                                                          <tr
+                                                            key={`${appointment.sourceAppointmentLineId}-${appointmentIndex}`}
+                                                          >
+                                                            <td>
+                                                              {appointmentIndex + 1}
+                                                            </td>
+                                                            <td>
+                                                              <EditableAppointmentCell
+                                                                appointment={
+                                                                  appointment
+                                                                }
+                                                                container={
+                                                                  container
+                                                                }
+                                                                draft={
+                                                                  appointmentDraft
+                                                                }
+                                                                error={
+                                                                  appointmentCellErrors[
+                                                                    getAppointmentCellKey(
+                                                                      container.rowId,
+                                                                      detail.sourceOrderDetailId,
+                                                                      appointment.sourceAppointmentLineId,
+                                                                      "appointmentNumber",
+                                                                    )
+                                                                  ]
+                                                                }
+                                                                field="appointmentNumber"
+                                                                isEditing={isEditingAppointmentCell(
+                                                                  editingAppointmentCell,
+                                                                  container.rowId,
+                                                                  detail.sourceOrderDetailId,
+                                                                  appointment.sourceAppointmentLineId,
+                                                                  "appointmentNumber",
+                                                                )}
+                                                                isSaving={savingAppointmentCells.has(
+                                                                  getAppointmentCellKey(
+                                                                    container.rowId,
+                                                                    detail.sourceOrderDetailId,
+                                                                    appointment.sourceAppointmentLineId,
+                                                                    "appointmentNumber",
+                                                                  ),
+                                                                )}
+                                                                onCancel={
+                                                                  cancelAppointmentEdit
+                                                                }
+                                                                onCommit={(
+                                                                  value,
+                                                                ) =>
+                                                                  commitAppointmentEdit(
+                                                                    container,
+                                                                    detail,
+                                                                    appointment,
+                                                                    "appointmentNumber",
+                                                                    value,
+                                                                  )
+                                                                }
+                                                                onDraftChange={
+                                                                  setAppointmentDraft
+                                                                }
+                                                                readOnly={!isAdmin}
+                                                                onStart={() =>
+                                                                  startAppointmentEdit(
+                                                                    container,
+                                                                    detail,
+                                                                    appointment,
+                                                                    "appointmentNumber",
+                                                                  )
+                                                                }
+                                                              />
+                                                            </td>
+                                                            <td>
+                                                              <EditableAppointmentCell
+                                                                appointment={
+                                                                  appointment
+                                                                }
+                                                                container={
+                                                                  container
+                                                                }
+                                                                draft={
+                                                                  appointmentDraft
+                                                                }
+                                                                error={
+                                                                  appointmentCellErrors[
+                                                                    getAppointmentCellKey(
+                                                                      container.rowId,
+                                                                      detail.sourceOrderDetailId,
+                                                                      appointment.sourceAppointmentLineId,
+                                                                      "deliveryDate",
+                                                                    )
+                                                                  ]
+                                                                }
+                                                                field="deliveryDate"
+                                                                isEditing={isEditingAppointmentCell(
+                                                                  editingAppointmentCell,
+                                                                  container.rowId,
+                                                                  detail.sourceOrderDetailId,
+                                                                  appointment.sourceAppointmentLineId,
+                                                                  "deliveryDate",
+                                                                )}
+                                                                isSaving={savingAppointmentCells.has(
+                                                                  getAppointmentCellKey(
+                                                                    container.rowId,
+                                                                    detail.sourceOrderDetailId,
+                                                                    appointment.sourceAppointmentLineId,
+                                                                    "deliveryDate",
+                                                                  ),
+                                                                )}
+                                                                onCancel={
+                                                                  cancelAppointmentEdit
+                                                                }
+                                                                onCommit={(
+                                                                  value,
+                                                                ) =>
+                                                                  commitAppointmentEdit(
+                                                                    container,
+                                                                    detail,
+                                                                    appointment,
+                                                                    "deliveryDate",
+                                                                    value,
+                                                                  )
+                                                                }
+                                                                onDraftChange={
+                                                                  setAppointmentDraft
+                                                                }
+                                                                readOnly={!isAdmin}
+                                                                onStart={() =>
+                                                                  startAppointmentEdit(
+                                                                    container,
+                                                                    detail,
+                                                                    appointment,
+                                                                    "deliveryDate",
+                                                                  )
+                                                                }
+                                                              />
+                                                            </td>
+                                                            <td>
+                                                              {numberOrDash(
+                                                                appointment.estimatedPallets,
+                                                              )}
+                                                            </td>
+                                                            <td>
+                                                              {numberOrDash(
+                                                                appointment.rejectedPallets,
+                                                              )}
+                                                            </td>
+                                                            <td>
+                                                              <EditableAppointmentCell
+                                                                appointment={
+                                                                  appointment
+                                                                }
+                                                                container={
+                                                                  container
+                                                                }
+                                                                draft={
+                                                                  appointmentDraft
+                                                                }
+                                                                error={
+                                                                  appointmentCellErrors[
+                                                                    getAppointmentCellKey(
+                                                                      container.rowId,
+                                                                      detail.sourceOrderDetailId,
+                                                                      appointment.sourceAppointmentLineId,
+                                                                      "effectivePallets",
+                                                                    )
+                                                                  ]
+                                                                }
+                                                                field="effectivePallets"
+                                                                isEditing={isEditingAppointmentCell(
+                                                                  editingAppointmentCell,
+                                                                  container.rowId,
+                                                                  detail.sourceOrderDetailId,
+                                                                  appointment.sourceAppointmentLineId,
+                                                                  "effectivePallets",
+                                                                )}
+                                                                isSaving={savingAppointmentCells.has(
+                                                                  getAppointmentCellKey(
+                                                                    container.rowId,
+                                                                    detail.sourceOrderDetailId,
+                                                                    appointment.sourceAppointmentLineId,
+                                                                    "effectivePallets",
+                                                                  ),
+                                                                )}
+                                                                onCancel={
+                                                                  cancelAppointmentEdit
+                                                                }
+                                                                onCommit={(
+                                                                  value,
+                                                                ) =>
+                                                                  commitAppointmentEdit(
+                                                                    container,
+                                                                    detail,
+                                                                    appointment,
+                                                                    "effectivePallets",
+                                                                    value,
+                                                                  )
+                                                                }
+                                                                onDraftChange={
+                                                                  setAppointmentDraft
+                                                                }
+                                                                readOnly={!isAdmin}
+                                                                onStart={() =>
+                                                                  startAppointmentEdit(
+                                                                    container,
+                                                                    detail,
+                                                                    appointment,
+                                                                    "effectivePallets",
+                                                                  )
+                                                                }
+                                                              />
+                                                            </td>
+                                                          </tr>
+                                                        ),
+                                                      )}
+                                                    </tbody>
+                                                  </table>
+                                                ) : (
+                                                  <div className="noAppointments">
+                                                    该仓点暂无送仓预约
+                                                  </div>
+                                                )}
+                                              </div>
+                                            </td>
+                                          </tr>
+                                        ) : null}
+                                      </Fragment>
+                                    );
+                                  })}
                                 </tbody>
                               </table>
                             ) : (
                               <div className="noAppointments">
-                                该柜号暂无送货预约信息
+                                该柜号暂无仓点明细
                               </div>
                             )}
                           </div>
@@ -2175,11 +2407,11 @@ function EditableAppointmentCell({
   readOnly,
   onStart,
 }: {
-  appointment: DeliveryAppointment;
+  appointment: WarehouseAppointment;
   container: TableContainerRecord;
   draft: string;
   error?: string;
-  field: EditableAppointmentField;
+  field: EditableWarehouseAppointmentField;
   isEditing: boolean;
   isSaving: boolean;
   onCancel: () => void;
@@ -2207,9 +2439,15 @@ function EditableAppointmentCell({
       <div className="editableAppointmentCell isEditing">
         <input
           className="editableAppointmentInput"
-          type={field === "deliveryTime" ? "datetime-local" : field === "palletCount" ? "number" : "text"}
-          min={field === "palletCount" ? "0" : undefined}
-          step={field === "palletCount" ? "1" : undefined}
+          type={
+            field === "deliveryDate"
+              ? "date"
+              : field === "effectivePallets"
+                ? "number"
+                : "text"
+          }
+          min={field === "effectivePallets" ? "0" : undefined}
+          step={field === "effectivePallets" ? "1" : undefined}
           value={draft}
           aria-label={`${container.containerNumber} ${label}`}
           aria-invalid={Boolean(error)}
@@ -2241,7 +2479,7 @@ function EditableAppointmentCell({
         .filter(Boolean)
         .join(" ")}
       aria-label={`${container.containerNumber} ${label}，点击修改`}
-      disabled={isSaving || !appointment.sourceAppointmentId}
+      disabled={isSaving || !appointment.sourceAppointmentLineId}
       title={error ?? `${label}：${displayValue}，点击修改`}
       onClick={onStart}
     >
@@ -2437,6 +2675,24 @@ function valueOrDash(value: string | null | undefined) {
   return value && value.trim() ? value : "—";
 }
 
+function numberOrDash(value: number | null | undefined) {
+  return value === null || value === undefined ? "—" : String(value);
+}
+
+function formatPercentValue(value: string | null | undefined) {
+  const displayValue = valueOrDash(value);
+  if (displayValue === "—") return displayValue;
+  if (displayValue.endsWith("%")) return displayValue;
+
+  const numericValue = Number(displayValue.replace(/,/g, ""));
+  if (Number.isNaN(numericValue)) return displayValue;
+
+  return `${new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 0,
+  }).format(numericValue)}%`;
+}
+
 function formatLocationPreview(value: string | null | undefined) {
   const rawValue = value?.trim();
   if (!rawValue) {
@@ -2522,84 +2778,114 @@ function getDateFieldLabel(field: EditableDateField) {
 
 function getAppointmentCellKey(
   rowId: string,
-  sourceAppointmentId: string,
-  field: EditableAppointmentField,
+  sourceOrderDetailId: string,
+  sourceAppointmentLineId: string,
+  field: EditableWarehouseAppointmentField,
 ) {
-  return `${rowId}:${sourceAppointmentId}:${field}`;
+  return `${rowId}:${sourceOrderDetailId}:${sourceAppointmentLineId}:${field}`;
 }
 
-function getAppointmentFieldLabel(field: EditableAppointmentField) {
-  if (field === "warehousePoint") return "仓点";
-  if (field === "isaNumber") return "ISA Number";
-  if (field === "deliveryTime") return "送货时间";
-  return "排车板数";
+function getWarehouseDetailKey(rowId: string, sourceOrderDetailId: string) {
+  return `${rowId}:${sourceOrderDetailId}`;
+}
+
+function getAppointmentFieldLabel(field: EditableWarehouseAppointmentField) {
+  if (field === "appointmentNumber") return "预约号码";
+  if (field === "deliveryDate") return "送仓日";
+  return "有效板数";
 }
 
 function isEditingAppointmentCell(
   cell: {
     rowId: string;
-    sourceAppointmentId: string;
-    field: EditableAppointmentField;
+    sourceOrderDetailId: string;
+    sourceAppointmentLineId: string;
+    field: EditableWarehouseAppointmentField;
   } | null,
   rowId: string,
-  sourceAppointmentId: string,
-  field: EditableAppointmentField,
+  sourceOrderDetailId: string,
+  sourceAppointmentLineId: string,
+  field: EditableWarehouseAppointmentField,
 ) {
   return (
     cell?.rowId === rowId &&
-    cell.sourceAppointmentId === sourceAppointmentId &&
+    cell.sourceOrderDetailId === sourceOrderDetailId &&
+    cell.sourceAppointmentLineId === sourceAppointmentLineId &&
     cell.field === field
   );
 }
 
 function getAppointmentDisplayValue(
-  appointment: DeliveryAppointment,
-  field: EditableAppointmentField,
+  appointment: WarehouseAppointment,
+  field: EditableWarehouseAppointmentField,
 ) {
-  if (field === "warehousePoint") return valueOrDash(appointment.warehousePoint);
-  if (field === "isaNumber") return valueOrDash(appointment.isaNumber);
-  if (field === "deliveryTime") return valueOrDash(appointment.deliveryTime);
-  return appointment.palletCount === null ? "—" : String(appointment.palletCount);
+  if (field === "appointmentNumber") {
+    return valueOrDash(appointment.appointmentNumber);
+  }
+  if (field === "deliveryDate") return valueOrDash(appointment.deliveryDate);
+  return numberOrDash(appointment.effectivePallets);
 }
 
 function getAppointmentDraftValue(
-  appointment: DeliveryAppointment,
-  field: EditableAppointmentField,
+  appointment: WarehouseAppointment,
+  field: EditableWarehouseAppointmentField,
 ) {
-  if (field === "warehousePoint") return appointment.warehousePoint ?? "";
-  if (field === "isaNumber") return appointment.isaNumber ?? "";
-  if (field === "deliveryTime") {
-    return appointment.deliveryTime?.replace(" ", "T") ?? "";
+  if (field === "appointmentNumber") return appointment.appointmentNumber ?? "";
+  if (field === "deliveryDate") {
+    return appointment.deliveryDate ?? "";
   }
-  return appointment.palletCount === null ? "" : String(appointment.palletCount);
+  return appointment.effectivePallets === null
+    ? ""
+    : String(appointment.effectivePallets);
 }
 
 function validateAppointmentDraft(
-  field: EditableAppointmentField,
+  field: EditableWarehouseAppointmentField,
   value: string,
 ) {
-  if (field === "palletCount" && value && !/^\d+$/.test(value)) {
+  if (field === "effectivePallets" && value && !/^\d+$/.test(value)) {
     return "板数必须是非负整数";
   }
 
   if (
-    field === "deliveryTime" &&
+    field === "deliveryDate" &&
     value &&
-    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)
+    !/^\d{4}-\d{2}-\d{2}$/.test(value)
   ) {
-    return "请输入有效送货时间";
+    return "请输入有效送仓日";
   }
 
   return "";
 }
 
 function coerceAppointmentValue(
-  field: EditableAppointmentField,
+  field: EditableWarehouseAppointmentField,
   value: string,
 ) {
-  if (field === "palletCount") return value ? Number(value) : null;
-  if (field === "deliveryTime") return value ? value.replace("T", " ") : null;
+  if (field === "effectivePallets") return value ? Number(value) : null;
   return value || null;
+}
+
+function mapLegacyAppointmentField(
+  field: EditableWarehouseAppointmentField,
+): EditableAppointmentField {
+  if (field === "appointmentNumber") return "isaNumber";
+  if (field === "deliveryDate") return "deliveryTime";
+  return "palletCount";
+}
+
+function legacyAppointmentToWarehouseAppointment(
+  appointment: DeliveryAppointment,
+): WarehouseAppointment {
+  return {
+    sourceAppointmentLineId: `legacy:${appointment.sourceAppointmentId}`,
+    sourceAppointmentId: appointment.sourceAppointmentId,
+    appointmentNumber: appointment.isaNumber,
+    deliveryDate: appointment.deliveryTime?.slice(0, 10) ?? null,
+    estimatedPallets: appointment.palletCount,
+    rejectedPallets: 0,
+    effectivePallets: appointment.palletCount,
+  };
 }
 
 function hasDateField(
@@ -2625,15 +2911,20 @@ function formatDateInput(date: Date) {
 }
 
 function getLocationText(container: ContainerRecord) {
+  const warehouseDetailText = container.warehouseDetails
+    ?.map((detail) => detail.warehousePoint)
+    .filter(Boolean)
+    .join(", ");
+
   if (container.operationMode === "direct_delivery") {
     return container.destination;
   }
 
   if (container.operationMode === "unload") {
-    return container.warehousePoints;
+    return warehouseDetailText || container.warehousePoints;
   }
 
-  return container.destination ?? container.warehousePoints;
+  return container.destination ?? warehouseDetailText ?? container.warehousePoints;
 }
 
 function getMockContainerPayload({
@@ -2694,7 +2985,11 @@ function getMockContainerPayload({
 }
 
 function createMockContainers(): TableContainerRecord[] {
-  const edgeCases: ContainerRecord[] = [
+  const edgeCases: Array<
+    Omit<ContainerRecord, "warehouseDetails"> & {
+      warehouseDetails?: WarehouseDetail[];
+    }
+  > = [
     {
       sourceOrderId: "mock-edge-1",
       containerNumber: "TEST0000001",
@@ -2710,6 +3005,7 @@ function createMockContainers(): TableContainerRecord[] {
       destination: "FAT2",
       warehousePoints: null,
       appointments: [],
+      warehouseDetails: [],
     },
     {
       sourceOrderId: "mock-edge-2",
@@ -2734,6 +3030,21 @@ function createMockContainers(): TableContainerRecord[] {
           palletCount: 12,
         },
       ],
+      warehouseDetails: [
+        createMockWarehouseDetail("mock-edge-2-detail-1", "FAT2", 12, [
+          {
+            sourceAppointmentLineId: "mock-edge-2-line-1",
+            sourceAppointmentId: "mock-appointment-1",
+            appointmentNumber: "ISA-LONG-001",
+            deliveryDate: "2026-01-10",
+            estimatedPallets: 12,
+            rejectedPallets: 0,
+            effectivePallets: 12,
+          },
+        ]),
+        createMockWarehouseDetail("mock-edge-2-detail-2", "HLI2", 8, []),
+        createMockWarehouseDetail("mock-edge-2-detail-3", "MCC1", 6, []),
+      ],
     },
     {
       sourceOrderId: "mock-edge-3",
@@ -2751,6 +3062,27 @@ function createMockContainers(): TableContainerRecord[] {
       warehousePoints:
         "FAT2, HLI2, MCC1, SCK8, BFI3, LGB8, ONT8, GYR3, LAS1, TEB9, 超长中文仓点测试, MIXED-WAREHOUSE-中文-01",
       appointments: [],
+      warehouseDetails: [
+        "FAT2",
+        "HLI2",
+        "MCC1",
+        "SCK8",
+        "BFI3",
+        "LGB8",
+        "ONT8",
+        "GYR3",
+        "LAS1",
+        "TEB9",
+        "超长中文仓点测试",
+        "MIXED-WAREHOUSE-中文-01",
+      ].map((warehousePoint, index) =>
+        createMockWarehouseDetail(
+          `mock-edge-3-detail-${index + 1}`,
+          warehousePoint,
+          index + 1,
+          [],
+        ),
+      ),
     },
     {
       sourceOrderId: "mock-edge-4",
@@ -2768,6 +3100,7 @@ function createMockContainers(): TableContainerRecord[] {
         "ULTRA-LONG-WAREHOUSE-CODE-WITHOUT-BREAKS-ABCDEFGHIJKLMNOPQRSTUVWXYZ-0123456789",
       warehousePoints: null,
       appointments: [],
+      warehouseDetails: [],
     },
     {
       sourceOrderId: "mock-edge-5",
@@ -2784,6 +3117,7 @@ function createMockContainers(): TableContainerRecord[] {
       destination: null,
       warehousePoints: null,
       appointments: [],
+      warehouseDetails: [],
     },
     {
       sourceOrderId: "mock-edge-6",
@@ -2800,6 +3134,21 @@ function createMockContainers(): TableContainerRecord[] {
       destination: null,
       warehousePoints: "洛杉矶仓点A, Oakland Warehouse B, 超长中文仓点名称测试C",
       appointments: [],
+      warehouseDetails: [
+        createMockWarehouseDetail("mock-edge-6-detail-1", "洛杉矶仓点A", 9, []),
+        createMockWarehouseDetail(
+          "mock-edge-6-detail-2",
+          "Oakland Warehouse B",
+          10,
+          [],
+        ),
+        createMockWarehouseDetail(
+          "mock-edge-6-detail-3",
+          "超长中文仓点名称测试C",
+          11,
+          [],
+        ),
+      ],
     },
   ];
 
@@ -2827,11 +3176,68 @@ function createMockContainers(): TableContainerRecord[] {
         ? `FAT2, HLI2, MOCK${rowNumber}, Warehouse ${rowNumber}`
         : null,
       appointments: [],
+      warehouseDetails: isUnload
+        ? [
+            createMockWarehouseDetail(
+              `mock-generated-${rowNumber}-detail-1`,
+              "FAT2",
+              10,
+              [],
+            ),
+            createMockWarehouseDetail(
+              `mock-generated-${rowNumber}-detail-2`,
+              `MOCK${rowNumber}`,
+              8,
+              [
+                {
+                  sourceAppointmentLineId: `mock-generated-${rowNumber}-line-1`,
+                  sourceAppointmentId: `mock-generated-${rowNumber}-appointment-1`,
+                  appointmentNumber: `ISA${rowNumber}001`,
+                  deliveryDate: `2026-04-${String((rowNumber % 24) + 1).padStart(2, "0")}`,
+                  estimatedPallets: 6,
+                  rejectedPallets: 1,
+                  effectivePallets: 5,
+                },
+              ],
+            ),
+          ]
+        : [],
     } satisfies ContainerRecord;
   });
 
-  return [...edgeCases, ...generatedRows].map((container, index) => ({
-    ...container,
-    rowId: createRowId(container, index),
-  }));
+  return [...edgeCases, ...generatedRows].map((container, index) => {
+    const normalizedContainer: ContainerRecord = {
+      ...container,
+      warehouseDetails: container.warehouseDetails ?? [],
+    };
+
+    return {
+      ...normalizedContainer,
+      rowId: createRowId(normalizedContainer, index),
+    };
+  });
+}
+
+function createMockWarehouseDetail(
+  sourceOrderDetailId: string,
+  warehousePoint: string,
+  estimatedPallets: number,
+  appointments: WarehouseAppointment[],
+): WarehouseDetail {
+  return {
+    sourceOrderDetailId,
+    deliveryNature: "AMZ",
+    warehousePoint,
+    volume: (estimatedPallets * 1.33).toFixed(2),
+    estimatedPallets,
+    volumePercentage: "25",
+    warehouseLocation: estimatedPallets % 2 === 0 ? "A0" : "C12/C15",
+    actualPallets: Math.max(0, estimatedPallets - 1),
+    remainingPallets: 0,
+    deliveryProgress: "100",
+    fba: "-",
+    notes: estimatedPallets % 3 === 0 ? "到港后尽快安排派送" : "-",
+    po: null,
+    appointments,
+  };
 }

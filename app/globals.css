@@ -1336,10 +1336,83 @@ body.rowDragActive * {
   border-bottom: 1px solid var(--line);
 }
 
-.detailsTitle {
+.warehouseDetailsPanel {
+  overflow-x: auto;
+}
+
+.detailsHeaderRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 760px;
   margin-bottom: 10px;
+}
+
+.detailsTitle {
   color: #42515c;
   font-size: 14px;
+  font-weight: 800;
+}
+
+.detailsHeaderRow span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.warehouseDetailTable {
+  width: 100%;
+  min-width: 1180px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  background: #ffffff;
+}
+
+.warehouseDetailTable th,
+.warehouseDetailTable td {
+  height: 42px;
+  border-bottom: 1px solid #e2e8f0;
+  color: #26354a;
+  font-size: 14px;
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.warehouseDetailTable th {
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.warehouseDetailTable th:first-child,
+.warehouseDetailTable td:first-child {
+  width: 42px;
+  text-align: center;
+}
+
+.warehouseDetailRow:hover td {
+  background: #f8fbff;
+}
+
+.warehouseAppointmentRow td {
+  height: auto;
+  background: #f8fafc;
+  padding: 0 0 12px 42px;
+}
+
+.warehouseAppointmentPanel {
+  width: min(980px, 100%);
+  padding: 12px 14px 4px;
+}
+
+.appointmentTitle {
+  margin-bottom: 8px;
+  color: #42515c;
+  font-size: 13px;
   font-weight: 800;
 }
 
@@ -1365,6 +1438,11 @@ body.rowDragActive * {
 .appointmentTable th {
   position: static;
   background: #f1f5f9;
+}
+
+.warehouseAppointmentTable {
+  width: 100%;
+  min-width: 760px;
 }
 
 .editableAppointmentCell {

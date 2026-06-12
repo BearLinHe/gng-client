@@ -215,6 +215,235 @@ const appointmentQuery = `
   order by warehouse_point asc, da.confirmed_start asc nulls last, da.reference_number asc nulls last
 `;
 
+const warehouseDetailQuery = `
+  with order_scope as (
+    select o.order_id, o.order_id::text as source_order_id
+    from public.orders o
+    where o.order_id = any($1::bigint[])
+      and o.order_number is not null
+      and btrim(o.order_number) <> ''
+  )
+  select
+    os.source_order_id,
+    od.id::text as source_order_detail_id,
+    od.delivery_nature,
+    coalesce(
+      nullif(
+        case
+          when detail_location.location_code is not null
+            and detail_location.name is not null
+            and detail_location.location_code <> detail_location.name
+            then detail_location.location_code || ' - ' || detail_location.name
+          else coalesce(detail_location.location_code, detail_location.name)
+        end,
+        ''
+      ),
+      nullif(appointment_detail_locations.warehouse_points, ''),
+      nullif(od.private_warehouse_info, ''),
+      od.delivery_location_id::text,
+      '未设置仓点'
+    ) as warehouse_point,
+    od.volume::text as volume,
+    od.estimated_pallets,
+    od.volume_percentage::text as volume_percentage,
+    coalesce(nullif(lot_summary.storage_locations, ''), nullif(od.window_period, '')) as warehouse_location,
+    case
+      when coalesce(lot_summary.lot_count, 0) > 0
+        then lot_summary.actual_pallets
+      else od.estimated_pallets
+    end as actual_pallets,
+    case
+      when coalesce(lot_summary.lot_count, 0) > 0
+        then lot_summary.remaining_pallets
+      else od.remaining_pallets
+    end as remaining_pallets,
+    case
+      when lot_summary.delivery_progress is not null
+        then lot_summary.delivery_progress::text
+      when coalesce(lot_summary.lot_count, 0) > 0
+        and coalesce(lot_summary.actual_pallets, 0) > 0
+        then round(
+          (
+            greatest(lot_summary.actual_pallets - coalesce(lot_summary.remaining_pallets, 0), 0)::numeric
+            / nullif(lot_summary.actual_pallets, 0)
+          ) * 100,
+          2
+        )::text
+      when coalesce(od.estimated_pallets, 0) > 0
+        then round(
+          (
+            greatest(od.estimated_pallets - coalesce(od.remaining_pallets, 0), 0)::numeric
+            / nullif(od.estimated_pallets, 0)
+          ) * 100,
+          2
+        )::text
+      else null
+    end as delivery_progress,
+    od.fba,
+    od.notes,
+    od.po
+  from order_scope os
+  join public.order_detail od
+    on od.order_id = os.order_id
+  left join public.locations detail_location
+    on detail_location.location_id = od.delivery_location_id
+  left join lateral (
+    select string_agg(
+      distinct coalesce(
+        nullif(
+          case
+            when appointment_location.location_code is not null
+              and appointment_location.name is not null
+              and appointment_location.location_code <> appointment_location.name
+              then appointment_location.location_code || ' - ' || appointment_location.name
+            else coalesce(appointment_location.location_code, appointment_location.name)
+          end,
+          ''
+        ),
+        da.location_id::text
+      ),
+      ', '
+      order by coalesce(
+        nullif(
+          case
+            when appointment_location.location_code is not null
+              and appointment_location.name is not null
+              and appointment_location.location_code <> appointment_location.name
+              then appointment_location.location_code || ' - ' || appointment_location.name
+            else coalesce(appointment_location.location_code, appointment_location.name)
+          end,
+          ''
+        ),
+        da.location_id::text
+      )
+    ) as warehouse_points
+    from oms.appointment_detail_lines adl_location
+    join oms.delivery_appointments da
+      on da.appointment_id = adl_location.appointment_id
+    left join public.locations appointment_location
+      on appointment_location.location_id = da.location_id
+    where adl_location.order_detail_id = od.id
+      and coalesce(da.enabled, true) = true
+  ) appointment_detail_locations on true
+  left join lateral (
+    select
+      count(*)::int as lot_count,
+      string_agg(
+        distinct nullif(il.storage_location_code, ''),
+        ', '
+        order by nullif(il.storage_location_code, '')
+      ) as storage_locations,
+      sum(coalesce(il.pallet_count, od.estimated_pallets, 0))::int as actual_pallets,
+      sum(coalesce(il.remaining_pallet_count, 0))::int as remaining_pallets,
+      avg(il.delivery_progress) as delivery_progress
+    from wms.inventory_lots il
+    where il.order_id = os.order_id
+      and il.order_detail_id = od.id
+  ) lot_summary on true
+  order by
+    os.source_order_id,
+    coalesce(
+      detail_location.location_code,
+      detail_location.name,
+      appointment_detail_locations.warehouse_points,
+      od.private_warehouse_info,
+      od.delivery_location_id::text
+    ),
+    od.id
+`;
+
+const warehouseAppointmentQuery = `
+  with order_scope as (
+    select o.order_id, o.order_id::text as source_order_id
+    from public.orders o
+    where o.order_id = any($1::bigint[])
+      and o.order_number is not null
+      and btrim(o.order_number) <> ''
+  )
+  select
+    os.source_order_id,
+    od.id::text as source_order_detail_id,
+    adl.id::text as source_appointment_line_id,
+    da.appointment_id::text as source_appointment_id,
+    coalesce(
+      nullif(
+        case
+          when appointment_location.location_code is not null
+            and appointment_location.name is not null
+            and appointment_location.location_code <> appointment_location.name
+            then appointment_location.location_code || ' - ' || appointment_location.name
+          else coalesce(appointment_location.location_code, appointment_location.name)
+        end,
+        ''
+      ),
+      detail_match.warehouse_point,
+      da.location_id::text,
+      '未设置仓点'
+    ) as warehouse_point,
+    da.reference_number as appointment_number,
+    da.confirmed_start::text as delivery_date,
+    adl.estimated_pallets,
+    coalesce(adl.rejected_pallets, 0) as rejected_pallets,
+    greatest(adl.estimated_pallets - coalesce(adl.rejected_pallets, 0), 0) as effective_pallets
+  from order_scope os
+  join public.order_detail od
+    on od.order_id = os.order_id
+  join oms.appointment_detail_lines adl
+    on adl.order_detail_id = od.id
+  join oms.delivery_appointments da
+    on da.appointment_id = adl.appointment_id
+  left join public.locations appointment_location
+    on appointment_location.location_id = da.location_id
+  left join lateral (
+    select coalesce(
+      nullif(
+        case
+          when detail_location.location_code is not null
+            and detail_location.name is not null
+            and detail_location.location_code <> detail_location.name
+            then detail_location.location_code || ' - ' || detail_location.name
+          else coalesce(detail_location.location_code, detail_location.name)
+        end,
+        ''
+      ),
+      nullif(od_match.private_warehouse_info, ''),
+      od_match.delivery_location_id::text
+    ) as warehouse_point
+    from oms.appointment_detail_lines adl_match
+    join public.order_detail od_match
+      on od_match.id = adl_match.order_detail_id
+    left join public.locations detail_location
+      on detail_location.location_id = od_match.delivery_location_id
+    where adl_match.appointment_id = da.appointment_id
+      and od_match.order_id = os.order_id
+    order by
+      coalesce(
+        nullif(
+          case
+            when detail_location.location_code is not null
+              and detail_location.name is not null
+              and detail_location.location_code <> detail_location.name
+              then detail_location.location_code || ' - ' || detail_location.name
+            else coalesce(detail_location.location_code, detail_location.name)
+          end,
+          ''
+        ),
+        nullif(od_match.private_warehouse_info, ''),
+        od_match.delivery_location_id::text
+      ) nulls last,
+      od_match.id
+    limit 1
+  ) detail_match on true
+  where da.appointment_id is not null
+    and coalesce(da.enabled, true) = true
+  order by
+    os.source_order_id,
+    od.id,
+    da.confirmed_start asc nulls last,
+    da.reference_number asc nulls last,
+    adl.id
+`;
+
 async function main() {
   const startedAt = new Date();
 
@@ -232,16 +461,31 @@ async function main() {
     console.log(`Read ${sourceRows.length} source orders.`);
 
     const appointmentsByOrderId = new Map();
+    const warehouseDetailPayload = [];
+    const warehouseAppointmentPayload = [];
     const orderIds = sourceRows.map((row) => Number(row.source_order_id));
     const chunkSize = 250;
 
-    console.log("Reading source appointments...");
+    console.log("Reading source appointments and warehouse details...");
     for (let index = 0; index < orderIds.length; index += chunkSize) {
       const chunk = orderIds.slice(index, index + chunkSize);
       const appointmentResult = await sourceClient.query(appointmentQuery, [chunk]);
       mergeAppointments(appointmentsByOrderId, appointmentResult.rows);
+
+      const warehouseDetailResult = await sourceClient.query(
+        warehouseDetailQuery,
+        [chunk],
+      );
+      warehouseDetailPayload.push(...warehouseDetailResult.rows);
+
+      const warehouseAppointmentResult = await sourceClient.query(
+        warehouseAppointmentQuery,
+        [chunk],
+      );
+      warehouseAppointmentPayload.push(...warehouseAppointmentResult.rows);
+
       console.log(
-        `Read appointments for ${Math.min(
+        `Read detail data for ${Math.min(
           index + chunk.length,
           orderIds.length,
         )}/${orderIds.length} orders.`,
@@ -277,6 +521,14 @@ async function main() {
         "update public.portal_delivery_appointments set source_active = false where source_order_id = any($1::text[])",
         [syncedOrderIds],
       );
+      await systemClient.query(
+        "update public.portal_warehouse_details set source_active = false where source_order_id = any($1::text[])",
+        [syncedOrderIds],
+      );
+      await systemClient.query(
+        "update public.portal_warehouse_appointments set source_active = false where source_order_id = any($1::text[])",
+        [syncedOrderIds],
+      );
     }
 
     let appointmentCount = 0;
@@ -298,6 +550,17 @@ async function main() {
       }
     }
     await upsertAppointments(systemClient, appointmentPayload);
+
+    applyWarehousePointFallbacks(
+      warehouseDetailPayload,
+      warehouseAppointmentPayload,
+    );
+
+    console.log("Writing warehouse details into system database...");
+    await upsertWarehouseDetails(systemClient, warehouseDetailPayload);
+
+    console.log("Writing warehouse appointments into system database...");
+    await upsertWarehouseAppointments(systemClient, warehouseAppointmentPayload);
 
     await migrateLocalPasswords(systemClient);
 
@@ -326,6 +589,8 @@ async function main() {
           customers: customerMap.size,
           containers: sourceRows.length,
           appointments: appointmentCount,
+          warehouseDetails: warehouseDetailPayload.length,
+          warehouseAppointments: warehouseAppointmentPayload.length,
         },
         null,
         2,
@@ -400,6 +665,48 @@ async function ensureSystemSchema(client) {
       primary key (source_order_id, source_appointment_id)
     );
 
+    create table if not exists public.portal_warehouse_details (
+      source_order_id text not null references public.portal_containers(source_order_id) on delete cascade,
+      source_order_detail_id text primary key,
+      source_delivery_nature text,
+      source_warehouse_point text,
+      source_volume numeric,
+      source_estimated_pallets integer,
+      source_volume_percentage numeric,
+      source_warehouse_location text,
+      source_actual_pallets integer,
+      source_remaining_pallets integer,
+      source_delivery_progress numeric,
+      source_fba text,
+      source_notes text,
+      source_po text,
+      source_active boolean not null default true,
+      synced_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    );
+
+    create table if not exists public.portal_warehouse_appointments (
+      source_order_id text not null references public.portal_containers(source_order_id) on delete cascade,
+      source_order_detail_id text not null references public.portal_warehouse_details(source_order_detail_id) on delete cascade,
+      source_appointment_line_id text not null,
+      source_appointment_id text,
+      source_appointment_number text,
+      source_delivery_date timestamptz,
+      source_estimated_pallets integer,
+      source_rejected_pallets integer,
+      source_effective_pallets integer,
+      source_active boolean not null default true,
+      manual_appointment_number text,
+      manual_delivery_date timestamptz,
+      manual_effective_pallets integer,
+      manual_appointment_number_override boolean not null default false,
+      manual_delivery_date_override boolean not null default false,
+      manual_effective_pallets_override boolean not null default false,
+      synced_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      primary key (source_order_id, source_order_detail_id, source_appointment_line_id)
+    );
+
     create table if not exists public.portal_customer_passwords (
       customer_code_normalized text primary key,
       password_hash text not null,
@@ -425,6 +732,16 @@ async function ensureSystemSchema(client) {
       on public.portal_containers(source_active);
     create index if not exists portal_delivery_appointments_order_idx
       on public.portal_delivery_appointments(source_order_id);
+    create index if not exists portal_warehouse_details_order_idx
+      on public.portal_warehouse_details(source_order_id);
+    create index if not exists portal_warehouse_details_active_idx
+      on public.portal_warehouse_details(source_active);
+    create index if not exists portal_warehouse_appointments_order_idx
+      on public.portal_warehouse_appointments(source_order_id);
+    create index if not exists portal_warehouse_appointments_detail_idx
+      on public.portal_warehouse_appointments(source_order_detail_id);
+    create index if not exists portal_warehouse_appointments_active_idx
+      on public.portal_warehouse_appointments(source_active);
   `);
 
   await client.query(`
@@ -441,6 +758,14 @@ async function ensureSystemSchema(client) {
       add column if not exists manual_isa_number_override boolean not null default false,
       add column if not exists manual_delivery_time_override boolean not null default false,
       add column if not exists manual_pallet_count_override boolean not null default false,
+      add column if not exists source_active boolean not null default true;
+  `);
+
+  await client.query(`
+    alter table public.portal_warehouse_appointments
+      add column if not exists manual_appointment_number_override boolean not null default false,
+      add column if not exists manual_delivery_date_override boolean not null default false,
+      add column if not exists manual_effective_pallets_override boolean not null default false,
       add column if not exists source_active boolean not null default true;
   `);
 }
@@ -499,6 +824,32 @@ async function upsertCustomers(client, customers) {
       name,
     })))],
   );
+}
+
+function applyWarehousePointFallbacks(details, appointments) {
+  const pointByDetailId = new Map();
+
+  for (const appointment of appointments) {
+    const detailId = appointment.source_order_detail_id;
+    const warehousePoint = normalizeWarehousePoint(appointment.warehouse_point);
+    if (!detailId || !warehousePoint || pointByDetailId.has(detailId)) continue;
+    pointByDetailId.set(detailId, warehousePoint);
+  }
+
+  for (const detail of details) {
+    const fallbackPoint = pointByDetailId.get(detail.source_order_detail_id);
+    if (!fallbackPoint) continue;
+
+    const currentPoint = normalizeWarehousePoint(detail.warehouse_point);
+    if (!currentPoint || currentPoint === "未设置仓点") {
+      detail.warehouse_point = fallbackPoint;
+    }
+  }
+}
+
+function normalizeWarehousePoint(value) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return normalized || null;
 }
 
 async function upsertContainers(client, containers) {
@@ -605,6 +956,146 @@ async function upsertAppointments(client, appointments) {
           source_isa_number = excluded.source_isa_number,
           source_delivery_time = excluded.source_delivery_time,
           source_pallet_count = excluded.source_pallet_count,
+          source_active = true,
+          synced_at = now(),
+          updated_at = now()
+      `,
+      [JSON.stringify(chunk)],
+    );
+  }
+}
+
+async function upsertWarehouseDetails(client, details) {
+  for (const chunk of chunks(details, 2000)) {
+    await client.query(
+      `
+        insert into public.portal_warehouse_details (
+          source_order_id,
+          source_order_detail_id,
+          source_delivery_nature,
+          source_warehouse_point,
+          source_volume,
+          source_estimated_pallets,
+          source_volume_percentage,
+          source_warehouse_location,
+          source_actual_pallets,
+          source_remaining_pallets,
+          source_delivery_progress,
+          source_fba,
+          source_notes,
+          source_po,
+          source_active,
+          synced_at,
+          updated_at
+        )
+        select
+          source_order_id,
+          source_order_detail_id,
+          delivery_nature,
+          warehouse_point,
+          volume::numeric,
+          estimated_pallets,
+          volume_percentage::numeric,
+          warehouse_location,
+          actual_pallets,
+          remaining_pallets,
+          delivery_progress::numeric,
+          fba,
+          notes,
+          po,
+          true,
+          now(),
+          now()
+        from jsonb_to_recordset($1::jsonb) as detail(
+          source_order_id text,
+          source_order_detail_id text,
+          delivery_nature text,
+          warehouse_point text,
+          volume text,
+          estimated_pallets integer,
+          volume_percentage text,
+          warehouse_location text,
+          actual_pallets integer,
+          remaining_pallets integer,
+          delivery_progress text,
+          fba text,
+          notes text,
+          po text
+        )
+        on conflict (source_order_detail_id)
+        do update set
+          source_order_id = excluded.source_order_id,
+          source_delivery_nature = excluded.source_delivery_nature,
+          source_warehouse_point = excluded.source_warehouse_point,
+          source_volume = excluded.source_volume,
+          source_estimated_pallets = excluded.source_estimated_pallets,
+          source_volume_percentage = excluded.source_volume_percentage,
+          source_warehouse_location = excluded.source_warehouse_location,
+          source_actual_pallets = excluded.source_actual_pallets,
+          source_remaining_pallets = excluded.source_remaining_pallets,
+          source_delivery_progress = excluded.source_delivery_progress,
+          source_fba = excluded.source_fba,
+          source_notes = excluded.source_notes,
+          source_po = excluded.source_po,
+          source_active = true,
+          synced_at = now(),
+          updated_at = now()
+      `,
+      [JSON.stringify(chunk)],
+    );
+  }
+}
+
+async function upsertWarehouseAppointments(client, appointments) {
+  for (const chunk of chunks(appointments, 2000)) {
+    await client.query(
+      `
+        insert into public.portal_warehouse_appointments (
+          source_order_id,
+          source_order_detail_id,
+          source_appointment_line_id,
+          source_appointment_id,
+          source_appointment_number,
+          source_delivery_date,
+          source_estimated_pallets,
+          source_rejected_pallets,
+          source_effective_pallets,
+          source_active,
+          synced_at,
+          updated_at
+        )
+        select
+          source_order_id,
+          source_order_detail_id,
+          source_appointment_line_id,
+          source_appointment_id,
+          appointment_number,
+          delivery_date::timestamptz,
+          estimated_pallets,
+          rejected_pallets,
+          effective_pallets,
+          true,
+          now(),
+          now()
+        from jsonb_to_recordset($1::jsonb) as appointment(
+          source_order_id text,
+          source_order_detail_id text,
+          source_appointment_line_id text,
+          source_appointment_id text,
+          appointment_number text,
+          delivery_date text,
+          estimated_pallets integer,
+          rejected_pallets integer,
+          effective_pallets integer
+        )
+        on conflict (source_order_id, source_order_detail_id, source_appointment_line_id)
+        do update set
+          source_appointment_id = excluded.source_appointment_id,
+          source_appointment_number = excluded.source_appointment_number,
+          source_delivery_date = excluded.source_delivery_date,
+          source_estimated_pallets = excluded.source_estimated_pallets,
+          source_rejected_pallets = excluded.source_rejected_pallets,
+          source_effective_pallets = excluded.source_effective_pallets,
           source_active = true,
           synced_at = now(),
           updated_at = now()

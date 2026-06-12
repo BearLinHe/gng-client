@@ -4,10 +4,12 @@ import { readCustomerSession } from "@/lib/auth";
 import {
   updateAppointmentDetail,
   updateContainerDate,
+  updateWarehouseAppointmentDetail,
   getContainers,
   type DateFilterField,
   type EditableAppointmentField,
   type EditableContainerDateField,
+  type EditableWarehouseAppointmentField,
   type PickupStatus,
 } from "@/lib/container-data";
 
@@ -76,6 +78,26 @@ export async function PATCH(request: NextRequest) {
   }
 
   try {
+    if (payload.kind === "warehouseAppointment") {
+      const updated = await updateWarehouseAppointmentDetail({
+        customerId: customer.id,
+        sourceOrderId: payload.sourceOrderId,
+        sourceOrderDetailId: payload.sourceOrderDetailId,
+        sourceAppointmentLineId: payload.sourceAppointmentLineId,
+        field: payload.field,
+        value: payload.value,
+      });
+
+      if (!updated) {
+        return NextResponse.json(
+          { error: "未找到可更新的送仓预约" },
+          { status: 404 },
+        );
+      }
+
+      return NextResponse.json({ warehouseAppointment: updated });
+    }
+
     if (payload.kind === "appointment") {
       const updated = await updateAppointmentDetail({
         customerId: customer.id,
@@ -157,13 +179,23 @@ function parsePatchPayload(
       field: EditableAppointmentField;
       value: string | null;
     }
+  | {
+      kind: "warehouseAppointment";
+      sourceOrderId: string;
+      sourceOrderDetailId: string;
+      sourceAppointmentLineId: string;
+      field: EditableWarehouseAppointmentField;
+      value: string | null;
+    }
   | null {
   if (!value || typeof value !== "object") return null;
 
   const body = value as {
     kind?: unknown;
     sourceOrderId?: unknown;
+    sourceOrderDetailId?: unknown;
     sourceAppointmentId?: unknown;
+    sourceAppointmentLineId?: unknown;
     field?: unknown;
     value?: unknown;
   };
@@ -181,6 +213,27 @@ function parsePatchPayload(
   }
 
   const parsedValue = typeof body.value === "string" ? body.value : null;
+
+  if (body.kind === "warehouseAppointment") {
+    if (
+      typeof body.sourceOrderDetailId !== "string" ||
+      !body.sourceOrderDetailId.trim() ||
+      typeof body.sourceAppointmentLineId !== "string" ||
+      !body.sourceAppointmentLineId.trim() ||
+      !isEditableWarehouseAppointmentField(body.field)
+    ) {
+      return null;
+    }
+
+    return {
+      kind: "warehouseAppointment",
+      sourceOrderId: body.sourceOrderId.trim(),
+      sourceOrderDetailId: body.sourceOrderDetailId.trim(),
+      sourceAppointmentLineId: body.sourceAppointmentLineId.trim(),
+      field: body.field,
+      value: parsedValue,
+    };
+  }
 
   if (body.kind === "appointment") {
     if (
@@ -210,6 +263,16 @@ function parsePatchPayload(
     field: body.field,
     value: parsedValue,
   };
+}
+
+function isEditableWarehouseAppointmentField(
+  value: unknown,
+): value is EditableWarehouseAppointmentField {
+  return (
+    value === "appointmentNumber" ||
+    value === "deliveryDate" ||
+    value === "effectivePallets"
+  );
 }
 
 function isEditableDateField(
