@@ -681,6 +681,8 @@ async function ensureSystemSchema(client) {
       source_notes text,
       source_po text,
       source_active boolean not null default true,
+      manual_actual_pallets integer,
+      manual_actual_pallets_override boolean not null default false,
       synced_at timestamptz not null default now(),
       updated_at timestamptz not null default now()
     );
@@ -766,6 +768,13 @@ async function ensureSystemSchema(client) {
       add column if not exists manual_appointment_number_override boolean not null default false,
       add column if not exists manual_delivery_date_override boolean not null default false,
       add column if not exists manual_effective_pallets_override boolean not null default false,
+      add column if not exists source_active boolean not null default true;
+  `);
+
+  await client.query(`
+    alter table public.portal_warehouse_details
+      add column if not exists manual_actual_pallets integer,
+      add column if not exists manual_actual_pallets_override boolean not null default false,
       add column if not exists source_active boolean not null default true;
   `);
 }

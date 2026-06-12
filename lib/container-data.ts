@@ -87,6 +87,7 @@ export type EditableWarehouseAppointmentField =
   | "appointmentNumber"
   | "deliveryDate"
   | "effectivePallets";
+export type EditableWarehouseDetailField = "actualPallets";
 export type PickupStatus = "pending" | "picked";
 
 type ContainerRow = {
@@ -261,6 +262,23 @@ const editableWarehouseAppointmentColumns: Record<
   effectivePallets: {
     valueColumn: "manual_effective_pallets",
     overrideColumn: "manual_effective_pallets_override",
+    cast: "integer",
+  },
+};
+
+const appWarehouseDetailColumns: Record<EditableWarehouseDetailField, string> =
+  {
+    actualPallets:
+      "case when pwd.manual_actual_pallets_override then pwd.manual_actual_pallets else pwd.source_actual_pallets end",
+  };
+
+const editableWarehouseDetailColumns: Record<
+  EditableWarehouseDetailField,
+  { valueColumn: string; overrideColumn: string; cast: string }
+> = {
+  actualPallets: {
+    valueColumn: "manual_actual_pallets",
+    overrideColumn: "manual_actual_pallets_override",
     cast: "integer",
   },
 };
@@ -610,7 +628,7 @@ export async function getContainers({
               'estimatedPallets', pwd.source_estimated_pallets,
               'volumePercentage', pwd.source_volume_percentage,
               'warehouseLocation', pwd.source_warehouse_location,
-              'actualPallets', pwd.source_actual_pallets,
+              'actualPallets', ${appWarehouseDetailColumns.actualPallets},
               'remainingPallets', pwd.source_remaining_pallets,
               'deliveryProgress', pwd.source_delivery_progress,
               'fba', pwd.source_fba,
@@ -765,6 +783,64 @@ export async function updateAppointmentDetail({
     if (!updated) return null;
 
     return toDeliveryAppointment(updated);
+  });
+}
+
+export async function updateWarehouseDetail({
+  customerId,
+  sourceOrderId,
+  sourceOrderDetailId,
+  field,
+  value,
+}: {
+  customerId: string;
+  sourceOrderId: string;
+  sourceOrderDetailId: string;
+  field: EditableWarehouseDetailField;
+  value: string | null;
+}): Promise<Pick<WarehouseDetail, "sourceOrderDetailId" | "actualPallets"> | null> {
+  const column = editableWarehouseDetailColumns[field];
+  const normalizedValue = normalizeWarehouseDetailValue(field, value);
+  const sourceOrderDetailIds = sourceOrderDetailId
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+
+  if (!sourceOrderDetailIds.length) return null;
+
+  return withAppTransaction(async (client) => {
+    let updatedRows = 0;
+
+    for (const [index, detailId] of sourceOrderDetailIds.entries()) {
+      const valueForRow =
+        sourceOrderDetailIds.length > 1 && index > 0 && normalizedValue !== null
+          ? 0
+          : normalizedValue;
+      const result = await client.query(
+        `
+          update public.portal_warehouse_details pwd
+          set ${column.valueColumn} = $4::${column.cast},
+              ${column.overrideColumn} = true,
+              updated_at = now()
+          from public.portal_containers pc
+          where pwd.source_order_id = pc.source_order_id
+            and pwd.source_order_id = $1
+            and pwd.source_order_detail_id = $2
+            and pc.source_customer_id = $3
+            and pwd.source_active = true
+            and pc.source_active = true
+        `,
+        [sourceOrderId, detailId, customerId, valueForRow],
+      );
+      updatedRows += result.rowCount ?? 0;
+    }
+
+    if (!updatedRows) return null;
+
+    return {
+      sourceOrderDetailId,
+      actualPallets: normalizedValue,
+    };
   });
 }
 
@@ -1364,6 +1440,21 @@ function normalizeWarehouseAppointmentValue(
   }
 
   return normalized || null;
+}
+
+function normalizeWarehouseDetailValue(
+  field: EditableWarehouseDetailField,
+  value: string | null | undefined,
+): number | null {
+  const normalized = value?.trim() ?? "";
+
+  if (field === "actualPallets") {
+    if (!normalized) return null;
+    if (!/^\d+$/.test(normalized)) throw new Error("INVALID_PALLET_COUNT");
+    return Number(normalized);
+  }
+
+  return null;
 }
 
 function formatDateTime(value: Date | string | null): string | null {

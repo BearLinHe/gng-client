@@ -1345,7 +1345,7 @@ body.rowDragActive * {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  min-width: 760px;
+  min-width: 520px;
   margin-bottom: 10px;
 }
 
@@ -1363,7 +1363,7 @@ body.rowDragActive * {
 
 .warehouseDetailTable {
   width: 100%;
-  min-width: 1180px;
+  min-width: 520px;
   border-collapse: collapse;
   table-layout: fixed;
   background: #ffffff;
@@ -1394,6 +1394,16 @@ body.rowDragActive * {
   text-align: center;
 }
 
+.warehouseDetailTable th:nth-child(2),
+.warehouseDetailTable td:nth-child(2) {
+  width: 65%;
+}
+
+.warehouseDetailTable th:nth-child(3),
+.warehouseDetailTable td:nth-child(3) {
+  width: 35%;
+}
+
 .warehouseDetailRow:hover td {
   background: #f8fbff;
 }
@@ -1405,7 +1415,7 @@ body.rowDragActive * {
 }
 
 .warehouseAppointmentPanel {
-  width: min(980px, 100%);
+  width: min(720px, 100%);
   padding: 12px 14px 4px;
 }
 
@@ -1442,7 +1452,7 @@ body.rowDragActive * {
 
 .warehouseAppointmentTable {
   width: 100%;
-  min-width: 760px;
+  min-width: 520px;
 }
 
 .editableAppointmentCell {

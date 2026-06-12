@@ -4,11 +4,13 @@ import { readCustomerSession } from "@/lib/auth";
 import {
   updateAppointmentDetail,
   updateContainerDate,
+  updateWarehouseDetail,
   updateWarehouseAppointmentDetail,
   getContainers,
   type DateFilterField,
   type EditableAppointmentField,
   type EditableContainerDateField,
+  type EditableWarehouseDetailField,
   type EditableWarehouseAppointmentField,
   type PickupStatus,
 } from "@/lib/container-data";
@@ -78,6 +80,25 @@ export async function PATCH(request: NextRequest) {
   }
 
   try {
+    if (payload.kind === "warehouseDetail") {
+      const updated = await updateWarehouseDetail({
+        customerId: customer.id,
+        sourceOrderId: payload.sourceOrderId,
+        sourceOrderDetailId: payload.sourceOrderDetailId,
+        field: payload.field,
+        value: payload.value,
+      });
+
+      if (!updated) {
+        return NextResponse.json(
+          { error: "未找到可更新的仓点明细" },
+          { status: 404 },
+        );
+      }
+
+      return NextResponse.json({ warehouseDetail: updated });
+    }
+
     if (payload.kind === "warehouseAppointment") {
       const updated = await updateWarehouseAppointmentDetail({
         customerId: customer.id,
@@ -180,6 +201,13 @@ function parsePatchPayload(
       value: string | null;
     }
   | {
+      kind: "warehouseDetail";
+      sourceOrderId: string;
+      sourceOrderDetailId: string;
+      field: EditableWarehouseDetailField;
+      value: string | null;
+    }
+  | {
       kind: "warehouseAppointment";
       sourceOrderId: string;
       sourceOrderDetailId: string;
@@ -213,6 +241,24 @@ function parsePatchPayload(
   }
 
   const parsedValue = typeof body.value === "string" ? body.value : null;
+
+  if (body.kind === "warehouseDetail") {
+    if (
+      typeof body.sourceOrderDetailId !== "string" ||
+      !body.sourceOrderDetailId.trim() ||
+      !isEditableWarehouseDetailField(body.field)
+    ) {
+      return null;
+    }
+
+    return {
+      kind: "warehouseDetail",
+      sourceOrderId: body.sourceOrderId.trim(),
+      sourceOrderDetailId: body.sourceOrderDetailId.trim(),
+      field: body.field,
+      value: parsedValue,
+    };
+  }
 
   if (body.kind === "warehouseAppointment") {
     if (
@@ -263,6 +309,12 @@ function parsePatchPayload(
     field: body.field,
     value: parsedValue,
   };
+}
+
+function isEditableWarehouseDetailField(
+  value: unknown,
+): value is EditableWarehouseDetailField {
+  return value === "actualPallets";
 }
 
 function isEditableWarehouseAppointmentField(

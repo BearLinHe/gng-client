@@ -85,6 +85,7 @@ type EditableWarehouseAppointmentField =
   | "appointmentNumber"
   | "deliveryDate"
   | "effectivePallets";
+type EditableWarehouseDetailField = "actualPallets";
 type PickupStatus = "all" | "pending" | "picked";
 
 type DeliveryAppointment = {
@@ -206,10 +207,24 @@ export default function ContainerDashboard() {
   const [appointmentCellErrors, setAppointmentCellErrors] = useState<
     Record<string, string>
   >({});
+  const [editingWarehouseDetailCell, setEditingWarehouseDetailCell] = useState<{
+    rowId: string;
+    sourceOrderDetailId: string;
+    field: EditableWarehouseDetailField;
+  } | null>(null);
+  const [warehouseDetailDraft, setWarehouseDetailDraft] = useState("");
+  const [savingWarehouseDetailCells, setSavingWarehouseDetailCells] = useState<
+    Set<string>
+  >(() => new Set());
+  const [warehouseDetailCellErrors, setWarehouseDetailCellErrors] = useState<
+    Record<string, string>
+  >({});
   const savingDateKeysRef = useRef(new Set<string>());
   const savingDateTimeoutsRef = useRef(new Map<string, number>());
   const savingAppointmentKeysRef = useRef(new Set<string>());
   const savingAppointmentTimeoutsRef = useRef(new Map<string, number>());
+  const savingWarehouseDetailKeysRef = useRef(new Set<string>());
+  const savingWarehouseDetailTimeoutsRef = useRef(new Map<string, number>());
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
   const rowDragSessionRef = useRef<RowDragSession | null>(null);
   const rowDragCleanupRef = useRef<(() => void) | null>(null);
@@ -217,6 +232,7 @@ export default function ContainerDashboard() {
   useEffect(() => {
     const dateTimeouts = savingDateTimeoutsRef.current;
     const appointmentTimeouts = savingAppointmentTimeoutsRef.current;
+    const warehouseDetailTimeouts = savingWarehouseDetailTimeoutsRef.current;
 
     return () => {
       rowDragCleanupRef.current?.();
@@ -228,6 +244,9 @@ export default function ContainerDashboard() {
         window.clearTimeout(timeoutId);
       }
       for (const timeoutId of appointmentTimeouts.values()) {
+        window.clearTimeout(timeoutId);
+      }
+      for (const timeoutId of warehouseDetailTimeouts.values()) {
         window.clearTimeout(timeoutId);
       }
       document.body.classList.remove("rowDragActive");
@@ -330,6 +349,9 @@ export default function ContainerDashboard() {
       setEditingAppointmentCell(null);
       setAppointmentCellErrors({});
       clearAllAppointmentSaving();
+      setEditingWarehouseDetailCell(null);
+      setWarehouseDetailCellErrors({});
+      clearAllWarehouseDetailSaving();
       setLoadState("idle");
       setError("");
       return;
@@ -378,6 +400,9 @@ export default function ContainerDashboard() {
         setEditingAppointmentCell(null);
         setAppointmentCellErrors({});
         clearAllAppointmentSaving();
+        setEditingWarehouseDetailCell(null);
+        setWarehouseDetailCellErrors({});
+        clearAllWarehouseDetailSaving();
         setLoadState("idle");
       }
     }
@@ -501,6 +526,39 @@ export default function ContainerDashboard() {
     savingAppointmentTimeoutsRef.current.clear();
     savingAppointmentKeysRef.current.clear();
     setSavingAppointmentCells(new Set());
+  }
+
+  function markWarehouseDetailCellSaving(key: string) {
+    savingWarehouseDetailKeysRef.current.add(key);
+    setSavingWarehouseDetailCells((current) => {
+      const next = new Set(current);
+      next.add(key);
+      return next;
+    });
+  }
+
+  function clearWarehouseDetailCellSaving(key: string) {
+    savingWarehouseDetailKeysRef.current.delete(key);
+    const timeoutId = savingWarehouseDetailTimeoutsRef.current.get(key);
+    if (timeoutId !== undefined) {
+      window.clearTimeout(timeoutId);
+      savingWarehouseDetailTimeoutsRef.current.delete(key);
+    }
+    setSavingWarehouseDetailCells((current) => {
+      if (!current.has(key)) return current;
+      const next = new Set(current);
+      next.delete(key);
+      return next;
+    });
+  }
+
+  function clearAllWarehouseDetailSaving() {
+    for (const timeoutId of savingWarehouseDetailTimeoutsRef.current.values()) {
+      window.clearTimeout(timeoutId);
+    }
+    savingWarehouseDetailTimeoutsRef.current.clear();
+    savingWarehouseDetailKeysRef.current.clear();
+    setSavingWarehouseDetailCells(new Set());
   }
 
   function startDateEdit(container: TableContainerRecord, field: EditableDateField) {
@@ -657,6 +715,157 @@ export default function ContainerDashboard() {
         setTotalCount((value) => Math.max(0, value - 1));
       }
     }
+  }
+
+  function startWarehouseDetailEdit(
+    container: TableContainerRecord,
+    warehouseDetail: WarehouseDetail,
+    field: EditableWarehouseDetailField,
+  ) {
+    const key = getWarehouseDetailCellKey(
+      container.rowId,
+      warehouseDetail.sourceOrderDetailId,
+      field,
+    );
+    if (savingWarehouseDetailKeysRef.current.has(key)) return;
+
+    setEditingWarehouseDetailCell({
+      rowId: container.rowId,
+      sourceOrderDetailId: warehouseDetail.sourceOrderDetailId,
+      field,
+    });
+    setWarehouseDetailDraft(getWarehouseDetailDraftValue(warehouseDetail, field));
+    setWarehouseDetailCellErrors((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }
+
+  function cancelWarehouseDetailEdit() {
+    setEditingWarehouseDetailCell(null);
+    setWarehouseDetailDraft("");
+  }
+
+  async function commitWarehouseDetailEdit(
+    container: TableContainerRecord,
+    warehouseDetail: WarehouseDetail,
+    field: EditableWarehouseDetailField,
+    value = warehouseDetailDraft,
+  ) {
+    const key = getWarehouseDetailCellKey(
+      container.rowId,
+      warehouseDetail.sourceOrderDetailId,
+      field,
+    );
+    if (savingWarehouseDetailKeysRef.current.has(key)) return;
+
+    const nextValue = value.trim();
+    const currentValue = getWarehouseDetailDraftValue(warehouseDetail, field);
+    if (nextValue === currentValue) {
+      cancelWarehouseDetailEdit();
+      return;
+    }
+
+    const validationError = validateWarehouseDetailDraft(field, nextValue);
+    if (validationError) {
+      setWarehouseDetailCellErrors((current) => ({
+        ...current,
+        [key]: validationError,
+      }));
+      return;
+    }
+
+    setEditingWarehouseDetailCell(null);
+    setWarehouseDetailDraft("");
+    markWarehouseDetailCellSaving(key);
+
+    if (mockLongTable) {
+      applyUpdatedWarehouseDetail(container, warehouseDetail.sourceOrderDetailId, {
+        sourceOrderDetailId: warehouseDetail.sourceOrderDetailId,
+        [field]: coerceWarehouseDetailValue(field, nextValue),
+      });
+      clearWarehouseDetailCellSaving(key);
+      return;
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => {
+        controller.abort();
+        clearWarehouseDetailCellSaving(key);
+        setWarehouseDetailCellErrors((current) => ({
+          ...current,
+          [key]: "保存超时，请重试",
+        }));
+      }, 10000);
+      savingWarehouseDetailTimeoutsRef.current.set(key, timeoutId);
+
+      const response = await fetch("/api/containers", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          kind: "warehouseDetail",
+          sourceOrderId: container.sourceOrderId,
+          sourceOrderDetailId: warehouseDetail.sourceOrderDetailId,
+          field,
+          value: nextValue || null,
+        }),
+      });
+      const payload = (await response.json()) as {
+        warehouseDetail?: Pick<
+          WarehouseDetail,
+          "sourceOrderDetailId" | "actualPallets"
+        >;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.warehouseDetail) {
+        throw new Error(payload.error ?? "保存失败");
+      }
+
+      applyUpdatedWarehouseDetail(
+        container,
+        warehouseDetail.sourceOrderDetailId,
+        payload.warehouseDetail,
+      );
+    } catch (saveError) {
+      if (saveError instanceof DOMException && saveError.name === "AbortError") {
+        return;
+      }
+
+      setWarehouseDetailCellErrors((current) => ({
+        ...current,
+        [key]: saveError instanceof Error ? saveError.message : "保存失败",
+      }));
+    } finally {
+      clearWarehouseDetailCellSaving(key);
+    }
+  }
+
+  function applyUpdatedWarehouseDetail(
+    original: TableContainerRecord,
+    sourceOrderDetailId: string,
+    updatedDetail: Pick<WarehouseDetail, "sourceOrderDetailId" | "actualPallets">,
+  ) {
+    setContainers((current) =>
+      current.map((row) =>
+        row.rowId === original.rowId
+          ? {
+              ...row,
+              warehouseDetails: row.warehouseDetails.map((detail) =>
+                detail.sourceOrderDetailId === sourceOrderDetailId
+                  ? {
+                      ...detail,
+                      actualPallets: updatedDetail.actualPallets,
+                    }
+                  : detail,
+              ),
+            }
+          : row,
+      ),
+    );
   }
 
   function startAppointmentEdit(
@@ -1408,6 +1617,10 @@ export default function ContainerDashboard() {
     setAppointmentDraft("");
     setAppointmentCellErrors({});
     clearAllAppointmentSaving();
+    setEditingWarehouseDetailCell(null);
+    setWarehouseDetailDraft("");
+    setWarehouseDetailCellErrors({});
+    clearAllWarehouseDetailSaving();
     setPage(1);
   }
 
@@ -1890,17 +2103,8 @@ export default function ContainerDashboard() {
                                 <thead>
                                   <tr>
                                     <th aria-label="展开送仓预约" />
-                                    <th>性质</th>
                                     <th>送仓地点</th>
-                                    <th>体积</th>
-                                    <th>预计板数</th>
-                                    <th>分仓占比</th>
-                                    <th>仓库位置</th>
                                     <th>实际板数</th>
-                                    <th>剩余板数</th>
-                                    <th>送货进度</th>
-                                    <th>FBA</th>
-                                    <th>备注</th>
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -1943,41 +2147,65 @@ export default function ContainerDashboard() {
                                               />
                                             </button>
                                           </td>
-                                          <td>{valueOrDash(detail.deliveryNature)}</td>
                                           <td>
                                             <TruncatedText
                                               text={detail.warehousePoint}
                                             />
                                           </td>
-                                          <td>{valueOrDash(detail.volume)}</td>
-                                          <td>{numberOrDash(detail.estimatedPallets)}</td>
                                           <td>
-                                            {formatPercentValue(
-                                              detail.volumePercentage,
-                                            )}
-                                          </td>
-                                          <td>
-                                            <TruncatedText
-                                              text={detail.warehouseLocation}
+                                            <EditableWarehouseDetailCell
+                                              detail={detail}
+                                              container={container}
+                                              draft={warehouseDetailDraft}
+                                              error={
+                                                warehouseDetailCellErrors[
+                                                  getWarehouseDetailCellKey(
+                                                    container.rowId,
+                                                    detail.sourceOrderDetailId,
+                                                    "actualPallets",
+                                                  )
+                                                ]
+                                              }
+                                              field="actualPallets"
+                                              isEditing={isEditingWarehouseDetailCell(
+                                                editingWarehouseDetailCell,
+                                                container.rowId,
+                                                detail.sourceOrderDetailId,
+                                                "actualPallets",
+                                              )}
+                                              isSaving={savingWarehouseDetailCells.has(
+                                                getWarehouseDetailCellKey(
+                                                  container.rowId,
+                                                  detail.sourceOrderDetailId,
+                                                  "actualPallets",
+                                                ),
+                                              )}
+                                              onCancel={cancelWarehouseDetailEdit}
+                                              onCommit={(value) =>
+                                                commitWarehouseDetailEdit(
+                                                  container,
+                                                  detail,
+                                                  "actualPallets",
+                                                  value,
+                                                )
+                                              }
+                                              onDraftChange={
+                                                setWarehouseDetailDraft
+                                              }
+                                              readOnly={!isAdmin}
+                                              onStart={() =>
+                                                startWarehouseDetailEdit(
+                                                  container,
+                                                  detail,
+                                                  "actualPallets",
+                                                )
+                                              }
                                             />
-                                          </td>
-                                          <td>{numberOrDash(detail.actualPallets)}</td>
-                                          <td>{numberOrDash(detail.remainingPallets)}</td>
-                                          <td>
-                                            {formatPercentValue(
-                                              detail.deliveryProgress,
-                                            )}
-                                          </td>
-                                          <td>
-                                            <TruncatedText text={detail.fba} />
-                                          </td>
-                                          <td>
-                                            <TruncatedText text={detail.notes} />
                                           </td>
                                         </tr>
                                         {isDetailExpanded ? (
                                           <tr className="warehouseAppointmentRow">
-                                            <td colSpan={12}>
+                                            <td colSpan={3}>
                                               <div className="warehouseAppointmentPanel">
                                                 <div className="appointmentTitle">
                                                   送仓预约 ({detail.appointments.length})
@@ -1986,11 +2214,8 @@ export default function ContainerDashboard() {
                                                   <table className="appointmentTable warehouseAppointmentTable">
                                                     <thead>
                                                       <tr>
-                                                        <th>送仓预约</th>
-                                                        <th>预约号码</th>
+                                                        <th>送仓预约号码</th>
                                                         <th>送仓日</th>
-                                                        <th>预计板数</th>
-                                                        <th>拒收板数</th>
                                                         <th>有效板数</th>
                                                       </tr>
                                                     </thead>
@@ -2003,9 +2228,6 @@ export default function ContainerDashboard() {
                                                           <tr
                                                             key={`${appointment.sourceAppointmentLineId}-${appointmentIndex}`}
                                                           >
-                                                            <td>
-                                                              {appointmentIndex + 1}
-                                                            </td>
                                                             <td>
                                                               <EditableAppointmentCell
                                                                 appointment={
@@ -2135,16 +2357,6 @@ export default function ContainerDashboard() {
                                                                   )
                                                                 }
                                                               />
-                                                            </td>
-                                                            <td>
-                                                              {numberOrDash(
-                                                                appointment.estimatedPallets,
-                                                              )}
-                                                            </td>
-                                                            <td>
-                                                              {numberOrDash(
-                                                                appointment.rejectedPallets,
-                                                              )}
                                                             </td>
                                                             <td>
                                                               <EditableAppointmentCell
@@ -2388,6 +2600,102 @@ function EditableDateCell({
         </>
       ) : (
         <DateValue value={value} />
+      )}
+    </button>
+  );
+}
+
+function EditableWarehouseDetailCell({
+  detail,
+  container,
+  draft,
+  error,
+  field,
+  isEditing,
+  isSaving,
+  onCancel,
+  onCommit,
+  onDraftChange,
+  readOnly,
+  onStart,
+}: {
+  detail: WarehouseDetail;
+  container: TableContainerRecord;
+  draft: string;
+  error?: string;
+  field: EditableWarehouseDetailField;
+  isEditing: boolean;
+  isSaving: boolean;
+  onCancel: () => void;
+  onCommit: (value: string) => void;
+  onDraftChange: (value: string) => void;
+  readOnly?: boolean;
+  onStart: () => void;
+}) {
+  const label = getWarehouseDetailFieldLabel(field);
+  const displayValue = getWarehouseDetailDisplayValue(detail, field);
+
+  if (readOnly) {
+    return (
+      <span
+        className="readonlyAppointmentCell"
+        title={`${label}：${displayValue}`}
+      >
+        {displayValue}
+      </span>
+    );
+  }
+
+  if (isEditing) {
+    return (
+      <div className="editableAppointmentCell isEditing">
+        <input
+          className="editableAppointmentInput"
+          type="number"
+          min="0"
+          step="1"
+          value={draft}
+          aria-label={`${container.containerNumber} ${detail.warehousePoint} ${label}`}
+          aria-invalid={Boolean(error)}
+          autoFocus
+          onBlur={(event) => onCommit(event.currentTarget.value)}
+          onChange={(event) => onDraftChange(event.currentTarget.value)}
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.currentTarget.blur();
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              onCancel();
+            }
+          }}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className={[
+        "editableAppointmentCell",
+        error ? "hasError" : "",
+        isSaving ? "isSaving" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      aria-label={`${container.containerNumber} ${detail.warehousePoint} ${label}，点击修改`}
+      disabled={isSaving}
+      title={error ?? `${label}：${displayValue}，点击修改`}
+      onClick={onStart}
+    >
+      {isSaving ? (
+        <>
+          <LoaderCircle className="cellSpinner" size={13} aria-hidden="true" />
+          <span>保存中</span>
+        </>
+      ) : (
+        displayValue
       )}
     </button>
   );
@@ -2787,6 +3095,74 @@ function getAppointmentCellKey(
 
 function getWarehouseDetailKey(rowId: string, sourceOrderDetailId: string) {
   return `${rowId}:${sourceOrderDetailId}`;
+}
+
+function getWarehouseDetailCellKey(
+  rowId: string,
+  sourceOrderDetailId: string,
+  field: EditableWarehouseDetailField,
+) {
+  return `${rowId}:${sourceOrderDetailId}:${field}`;
+}
+
+function getWarehouseDetailFieldLabel(field: EditableWarehouseDetailField) {
+  if (field === "actualPallets") return "实际板数";
+  return "仓点明细";
+}
+
+function isEditingWarehouseDetailCell(
+  cell: {
+    rowId: string;
+    sourceOrderDetailId: string;
+    field: EditableWarehouseDetailField;
+  } | null,
+  rowId: string,
+  sourceOrderDetailId: string,
+  field: EditableWarehouseDetailField,
+) {
+  return (
+    cell?.rowId === rowId &&
+    cell.sourceOrderDetailId === sourceOrderDetailId &&
+    cell.field === field
+  );
+}
+
+function getWarehouseDetailDisplayValue(
+  detail: WarehouseDetail,
+  field: EditableWarehouseDetailField,
+) {
+  if (field === "actualPallets") return numberOrDash(detail.actualPallets);
+  return "—";
+}
+
+function getWarehouseDetailDraftValue(
+  detail: WarehouseDetail,
+  field: EditableWarehouseDetailField,
+) {
+  if (field === "actualPallets") {
+    return detail.actualPallets === null ? "" : String(detail.actualPallets);
+  }
+
+  return "";
+}
+
+function validateWarehouseDetailDraft(
+  field: EditableWarehouseDetailField,
+  value: string,
+) {
+  if (field === "actualPallets" && value && !/^\d+$/.test(value)) {
+    return "板数必须是非负整数";
+  }
+
+  return "";
+}
+
+function coerceWarehouseDetailValue(
+  field: EditableWarehouseDetailField,
+  value: string,
+) {
+  if (field === "actualPallets") return value ? Number(value) : null;
+  return null;
 }
 
 function getAppointmentFieldLabel(field: EditableWarehouseAppointmentField) {
