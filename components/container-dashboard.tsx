@@ -2214,7 +2214,7 @@ export default function ContainerDashboard() {
                                                   <table className="appointmentTable warehouseAppointmentTable">
                                                     <thead>
                                                       <tr>
-                                                        <th>送仓预约号码</th>
+                                                        <th>预约号码</th>
                                                         <th>送仓日</th>
                                                         <th>有效板数</th>
                                                       </tr>

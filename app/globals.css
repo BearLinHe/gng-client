@@ -1369,8 +1369,8 @@ body.rowDragActive * {
   background: #ffffff;
 }
 
-.warehouseDetailTable th,
-.warehouseDetailTable td {
+.warehouseDetailTable > thead > tr > th,
+.warehouseDetailTable > tbody > tr > td {
   height: 42px;
   border-bottom: 1px solid #e2e8f0;
   color: #26354a;
@@ -1381,26 +1381,26 @@ body.rowDragActive * {
   white-space: nowrap;
 }
 
-.warehouseDetailTable th {
+.warehouseDetailTable > thead > tr > th {
   background: #f1f5f9;
   color: #475569;
   font-size: 12px;
   font-weight: 800;
 }
 
-.warehouseDetailTable th:first-child,
-.warehouseDetailTable td:first-child {
+.warehouseDetailTable > thead > tr > th:first-child,
+.warehouseDetailTable > tbody > tr.warehouseDetailRow > td:first-child {
   width: 42px;
   text-align: center;
 }
 
-.warehouseDetailTable th:nth-child(2),
-.warehouseDetailTable td:nth-child(2) {
+.warehouseDetailTable > thead > tr > th:nth-child(2),
+.warehouseDetailTable > tbody > tr.warehouseDetailRow > td:nth-child(2) {
   width: 65%;
 }
 
-.warehouseDetailTable th:nth-child(3),
-.warehouseDetailTable td:nth-child(3) {
+.warehouseDetailTable > thead > tr > th:nth-child(3),
+.warehouseDetailTable > tbody > tr.warehouseDetailRow > td:nth-child(3) {
   width: 35%;
 }
 
@@ -1452,7 +1452,22 @@ body.rowDragActive * {
 
 .warehouseAppointmentTable {
   width: 100%;
-  min-width: 520px;
+  min-width: 480px;
+}
+
+.warehouseAppointmentTable th:nth-child(1),
+.warehouseAppointmentTable td:nth-child(1) {
+  width: 42%;
+}
+
+.warehouseAppointmentTable th:nth-child(2),
+.warehouseAppointmentTable td:nth-child(2) {
+  width: 34%;
+}
+
+.warehouseAppointmentTable th:nth-child(3),
+.warehouseAppointmentTable td:nth-child(3) {
+  width: 24%;
 }
 
 .editableAppointmentCell {
