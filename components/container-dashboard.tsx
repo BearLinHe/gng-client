@@ -70,6 +70,7 @@ type ContainerRecord = {
   warehousePoints: string | null;
   appointments: DeliveryAppointment[];
   warehouseDetails: WarehouseDetail[];
+  billDocument: AppointmentDocumentMeta;
 };
 
 type TableContainerRecord = ContainerRecord & {
@@ -227,6 +228,12 @@ export default function ContainerDashboard() {
   const [appointmentDocumentErrors, setAppointmentDocumentErrors] = useState<
     Record<string, string>
   >({});
+  const [savingContainerBills, setSavingContainerBills] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [containerBillErrors, setContainerBillErrors] = useState<
+    Record<string, string>
+  >({});
   const [editingWarehouseDetailCell, setEditingWarehouseDetailCell] = useState<{
     rowId: string;
     sourceOrderDetailId: string;
@@ -244,6 +251,7 @@ export default function ContainerDashboard() {
   const savingAppointmentKeysRef = useRef(new Set<string>());
   const savingAppointmentTimeoutsRef = useRef(new Map<string, number>());
   const savingAppointmentDocumentKeysRef = useRef(new Set<string>());
+  const savingContainerBillKeysRef = useRef(new Set<string>());
   const savingWarehouseDetailKeysRef = useRef(new Set<string>());
   const savingWarehouseDetailTimeoutsRef = useRef(new Map<string, number>());
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
@@ -373,6 +381,9 @@ export default function ContainerDashboard() {
       setAppointmentDocumentErrors({});
       setSavingAppointmentDocuments(new Set());
       savingAppointmentDocumentKeysRef.current.clear();
+      setContainerBillErrors({});
+      setSavingContainerBills(new Set());
+      savingContainerBillKeysRef.current.clear();
       setEditingWarehouseDetailCell(null);
       setWarehouseDetailCellErrors({});
       clearAllWarehouseDetailSaving();
@@ -427,6 +438,9 @@ export default function ContainerDashboard() {
         setAppointmentDocumentErrors({});
         setSavingAppointmentDocuments(new Set());
         savingAppointmentDocumentKeysRef.current.clear();
+        setContainerBillErrors({});
+        setSavingContainerBills(new Set());
+        savingContainerBillKeysRef.current.clear();
         setEditingWarehouseDetailCell(null);
         setWarehouseDetailCellErrors({});
         clearAllWarehouseDetailSaving();
@@ -567,6 +581,25 @@ export default function ContainerDashboard() {
   function clearAppointmentDocumentSaving(key: string) {
     savingAppointmentDocumentKeysRef.current.delete(key);
     setSavingAppointmentDocuments((current) => {
+      if (!current.has(key)) return current;
+      const next = new Set(current);
+      next.delete(key);
+      return next;
+    });
+  }
+
+  function markContainerBillSaving(key: string) {
+    savingContainerBillKeysRef.current.add(key);
+    setSavingContainerBills((current) => {
+      const next = new Set(current);
+      next.add(key);
+      return next;
+    });
+  }
+
+  function clearContainerBillSaving(key: string) {
+    savingContainerBillKeysRef.current.delete(key);
+    setSavingContainerBills((current) => {
       if (!current.has(key)) return current;
       const next = new Set(current);
       next.delete(key);
@@ -1135,7 +1168,7 @@ export default function ContainerDashboard() {
     );
     if (savingAppointmentDocumentKeysRef.current.has(key)) return;
 
-    const validationError = validateAppointmentDocumentFile(file);
+    const validationError = validateDocumentFile(file);
     if (validationError) {
       setAppointmentDocumentErrors((current) => ({
         ...current,
@@ -1247,6 +1280,89 @@ export default function ContainerDashboard() {
                     }
                   : detail,
               ),
+            }
+          : row,
+      ),
+    );
+  }
+
+  async function uploadContainerBill({
+    container,
+    file,
+  }: {
+    container: TableContainerRecord;
+    file: File;
+  }) {
+    const key = getContainerBillKey(container.rowId);
+    if (savingContainerBillKeysRef.current.has(key)) return;
+
+    const validationError = validateDocumentFile(file);
+    if (validationError) {
+      setContainerBillErrors((current) => ({
+        ...current,
+        [key]: validationError,
+      }));
+      return;
+    }
+
+    if (mockLongTable) {
+      applyUpdatedContainerBill(container, {
+        hasFile: true,
+        fileName: file.name || "bill",
+        mimeType: file.type || guessDocumentMimeType(file.name),
+        fileSize: file.size,
+        uploadedAt: new Date().toISOString(),
+      });
+      return;
+    }
+
+    markContainerBillSaving(key);
+    setContainerBillErrors((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+
+    try {
+      const formData = new FormData();
+      formData.set("sourceOrderId", container.sourceOrderId);
+      formData.set("file", file);
+
+      const response = await fetch("/api/containers/bills", {
+        method: "POST",
+        body: formData,
+      });
+      const payload = (await response.json()) as {
+        document?: AppointmentDocumentMeta;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.document) {
+        throw new Error(payload.error ?? "上传账单失败");
+      }
+
+      applyUpdatedContainerBill(container, payload.document);
+    } catch (uploadError) {
+      setContainerBillErrors((current) => ({
+        ...current,
+        [key]:
+          uploadError instanceof Error ? uploadError.message : "上传账单失败",
+      }));
+    } finally {
+      clearContainerBillSaving(key);
+    }
+  }
+
+  function applyUpdatedContainerBill(
+    original: TableContainerRecord,
+    document: AppointmentDocumentMeta,
+  ) {
+    setContainers((current) =>
+      current.map((row) =>
+        row.rowId === original.rowId
+          ? {
+              ...row,
+              billDocument: document,
             }
           : row,
       ),
@@ -1511,11 +1627,36 @@ export default function ContainerDashboard() {
         id: "location",
         header: "目的地/仓点",
         accessorFn: (row) => getLocationText(row) ?? "",
-        size: 288,
-        minSize: 220,
-        maxSize: 340,
+        size: 248,
+        minSize: 200,
+        maxSize: 320,
         cell: ({ row }) => (
           <LocationCell value={getLocationText(row.original)} />
+        ),
+      },
+      {
+        id: "bill",
+        header: "账单",
+        size: 132,
+        minSize: 122,
+        maxSize: 150,
+        enableSorting: false,
+        cell: ({ row }) => (
+          <ContainerBillCell
+            container={row.original}
+            document={row.original.billDocument}
+            error={containerBillErrors[getContainerBillKey(row.original.rowId)]}
+            isAdmin={isAdmin}
+            isUploading={savingContainerBills.has(
+              getContainerBillKey(row.original.rowId),
+            )}
+            onUpload={(file) =>
+              uploadContainerBill({
+                container: row.original,
+                file,
+              })
+            }
+          />
         ),
       },
     ];
@@ -1819,6 +1960,9 @@ export default function ContainerDashboard() {
     setAppointmentDocumentErrors({});
     setSavingAppointmentDocuments(new Set());
     savingAppointmentDocumentKeysRef.current.clear();
+    setContainerBillErrors({});
+    setSavingContainerBills(new Set());
+    savingContainerBillKeysRef.current.clear();
     setEditingWarehouseDetailCell(null);
     setWarehouseDetailDraft("");
     setWarehouseDetailCellErrors({});
@@ -3227,6 +3371,78 @@ function AppointmentDocumentCell({
   );
 }
 
+function ContainerBillCell({
+  container,
+  document,
+  error,
+  isAdmin,
+  isUploading,
+  onUpload,
+}: {
+  container: TableContainerRecord;
+  document: AppointmentDocumentMeta;
+  error?: string;
+  isAdmin: boolean;
+  isUploading: boolean;
+  onUpload: (file: File) => void;
+}) {
+  return (
+    <div className="documentCell billDocumentCell">
+      {document.hasFile ? (
+        <a
+          className="documentViewLink"
+          href={getContainerBillUrl(container)}
+          target="_blank"
+          rel="noreferrer"
+          title={document.fileName ?? "查看账单"}
+        >
+          <FileText size={14} aria-hidden="true" />
+          查看
+        </a>
+      ) : (
+        <span className="documentEmpty">未上传</span>
+      )}
+      {isAdmin ? (
+        <label
+          className={[
+            "documentUploadButton",
+            isUploading ? "isUploading" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          aria-label={`${document.hasFile ? "更换" : "上传"}账单`}
+          role="button"
+          tabIndex={isUploading ? -1 : 0}
+          title={`${document.hasFile ? "更换" : "上传"}账单`}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            event.currentTarget.querySelector("input")?.click();
+          }}
+        >
+          {isUploading ? (
+            <LoaderCircle className="cellSpinner" size={13} aria-hidden="true" />
+          ) : (
+            <Upload size={13} aria-hidden="true" />
+          )}
+          <span>{isUploading ? "上传中" : document.hasFile ? "更换" : "上传"}</span>
+          <input
+            accept="image/*,application/pdf"
+            disabled={isUploading}
+            type="file"
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = "";
+              if (file) onUpload(file);
+            }}
+          />
+        </label>
+      ) : null}
+      {error ? <span className="documentError">{error}</span> : null}
+    </div>
+  );
+}
+
 function DateValue({ value }: { value: string | null | undefined }) {
   const displayValue = valueOrDash(value);
 
@@ -3526,6 +3742,10 @@ function getAppointmentDocumentKey(
   return `${rowId}:${sourceOrderDetailId}:${sourceAppointmentLineId}:${documentType}`;
 }
 
+function getContainerBillKey(rowId: string) {
+  return `${rowId}:bill`;
+}
+
 function getAppointmentSourceDetailId(
   appointment: WarehouseAppointment,
   warehouseDetail: WarehouseDetail,
@@ -3554,7 +3774,15 @@ function getAppointmentDocumentUrl({
   return `/api/containers/documents?${params.toString()}`;
 }
 
-function validateAppointmentDocumentFile(file: File) {
+function getContainerBillUrl(container: TableContainerRecord) {
+  const params = new URLSearchParams({
+    sourceOrderId: container.sourceOrderId,
+  });
+
+  return `/api/containers/bills?${params.toString()}`;
+}
+
+function validateDocumentFile(file: File) {
   if (!file.size) return "文件为空";
   if (file.size > 10 * 1024 * 1024) return "文件不能超过 10MB";
 
@@ -3874,8 +4102,9 @@ function getMockContainerPayload({
 
 function createMockContainers(): TableContainerRecord[] {
   const edgeCases: Array<
-    Omit<ContainerRecord, "warehouseDetails"> & {
+    Omit<ContainerRecord, "warehouseDetails" | "billDocument"> & {
       warehouseDetails?: WarehouseDetail[];
+      billDocument?: AppointmentDocumentMeta;
     }
   > = [
     {
@@ -4067,6 +4296,7 @@ function createMockContainers(): TableContainerRecord[] {
         ? `FAT2, HLI2, MOCK${rowNumber}, Warehouse ${rowNumber}`
         : null,
       appointments: [],
+      billDocument: emptyAppointmentDocument(),
       warehouseDetails: isUnload
         ? [
             createMockWarehouseDetail(
@@ -4102,6 +4332,7 @@ function createMockContainers(): TableContainerRecord[] {
   return [...edgeCases, ...generatedRows].map((container, index) => {
     const normalizedContainer: ContainerRecord = {
       ...container,
+      billDocument: container.billDocument ?? emptyAppointmentDocument(),
       warehouseDetails: container.warehouseDetails ?? [],
     };
 

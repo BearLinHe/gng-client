@@ -728,6 +728,16 @@ async function ensureSystemSchema(client) {
       )
     );
 
+    create table if not exists public.portal_container_bills (
+      source_order_id text primary key references public.portal_containers(source_order_id) on delete cascade,
+      file_name text not null,
+      mime_type text not null,
+      file_size integer not null,
+      file_data bytea not null,
+      uploaded_at timestamptz not null default now(),
+      updated_at timestamptz not null default now()
+    );
+
     create table if not exists public.portal_customer_passwords (
       customer_code_normalized text primary key,
       password_hash text not null,
@@ -771,6 +781,8 @@ async function ensureSystemSchema(client) {
         source_order_detail_id,
         source_appointment_line_id
       );
+    create index if not exists portal_container_bills_uploaded_idx
+      on public.portal_container_bills(uploaded_at);
   `);
 
   await client.query(`
