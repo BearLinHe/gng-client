@@ -11,6 +11,7 @@ import {
   Copy,
   Eye,
   EyeOff,
+  FileText,
   GripVertical,
   LoaderCircle,
   LogOut,
@@ -18,6 +19,7 @@ import {
   RotateCcw,
   Search,
   Settings,
+  Upload,
   UserRound,
 } from "lucide-react";
 import {
@@ -86,6 +88,7 @@ type EditableWarehouseAppointmentField =
   | "deliveryDate"
   | "effectivePallets";
 type EditableWarehouseDetailField = "actualPallets";
+type AppointmentDocumentType = "pod" | "bol";
 type PickupStatus = "all" | "pending" | "picked";
 
 type DeliveryAppointment = {
@@ -114,6 +117,7 @@ type WarehouseDetail = {
 };
 
 type WarehouseAppointment = {
+  sourceOrderDetailId: string;
   sourceAppointmentLineId: string;
   sourceAppointmentId: string | null;
   appointmentNumber: string | null;
@@ -121,6 +125,16 @@ type WarehouseAppointment = {
   estimatedPallets: number | null;
   rejectedPallets: number | null;
   effectivePallets: number | null;
+  podDocument: AppointmentDocumentMeta;
+  bolDocument: AppointmentDocumentMeta;
+};
+
+type AppointmentDocumentMeta = {
+  hasFile: boolean;
+  fileName: string | null;
+  mimeType: string | null;
+  fileSize: number | null;
+  uploadedAt: string | null;
 };
 
 type ContainerPayload = {
@@ -207,6 +221,12 @@ export default function ContainerDashboard() {
   const [appointmentCellErrors, setAppointmentCellErrors] = useState<
     Record<string, string>
   >({});
+  const [savingAppointmentDocuments, setSavingAppointmentDocuments] = useState<
+    Set<string>
+  >(() => new Set());
+  const [appointmentDocumentErrors, setAppointmentDocumentErrors] = useState<
+    Record<string, string>
+  >({});
   const [editingWarehouseDetailCell, setEditingWarehouseDetailCell] = useState<{
     rowId: string;
     sourceOrderDetailId: string;
@@ -223,6 +243,7 @@ export default function ContainerDashboard() {
   const savingDateTimeoutsRef = useRef(new Map<string, number>());
   const savingAppointmentKeysRef = useRef(new Set<string>());
   const savingAppointmentTimeoutsRef = useRef(new Map<string, number>());
+  const savingAppointmentDocumentKeysRef = useRef(new Set<string>());
   const savingWarehouseDetailKeysRef = useRef(new Set<string>());
   const savingWarehouseDetailTimeoutsRef = useRef(new Map<string, number>());
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
@@ -349,6 +370,9 @@ export default function ContainerDashboard() {
       setEditingAppointmentCell(null);
       setAppointmentCellErrors({});
       clearAllAppointmentSaving();
+      setAppointmentDocumentErrors({});
+      setSavingAppointmentDocuments(new Set());
+      savingAppointmentDocumentKeysRef.current.clear();
       setEditingWarehouseDetailCell(null);
       setWarehouseDetailCellErrors({});
       clearAllWarehouseDetailSaving();
@@ -400,6 +424,9 @@ export default function ContainerDashboard() {
         setEditingAppointmentCell(null);
         setAppointmentCellErrors({});
         clearAllAppointmentSaving();
+        setAppointmentDocumentErrors({});
+        setSavingAppointmentDocuments(new Set());
+        savingAppointmentDocumentKeysRef.current.clear();
         setEditingWarehouseDetailCell(null);
         setWarehouseDetailCellErrors({});
         clearAllWarehouseDetailSaving();
@@ -526,6 +553,25 @@ export default function ContainerDashboard() {
     savingAppointmentTimeoutsRef.current.clear();
     savingAppointmentKeysRef.current.clear();
     setSavingAppointmentCells(new Set());
+  }
+
+  function markAppointmentDocumentSaving(key: string) {
+    savingAppointmentDocumentKeysRef.current.add(key);
+    setSavingAppointmentDocuments((current) => {
+      const next = new Set(current);
+      next.add(key);
+      return next;
+    });
+  }
+
+  function clearAppointmentDocumentSaving(key: string) {
+    savingAppointmentDocumentKeysRef.current.delete(key);
+    setSavingAppointmentDocuments((current) => {
+      if (!current.has(key)) return current;
+      const next = new Set(current);
+      next.delete(key);
+      return next;
+    });
   }
 
   function markWarehouseDetailCellSaving(key: string) {
@@ -874,9 +920,11 @@ export default function ContainerDashboard() {
     appointment: WarehouseAppointment,
     field: EditableWarehouseAppointmentField,
   ) {
+    const sourceOrderDetailId =
+      appointment.sourceOrderDetailId || warehouseDetail.sourceOrderDetailId;
     const key = getAppointmentCellKey(
       container.rowId,
-      warehouseDetail.sourceOrderDetailId,
+      sourceOrderDetailId,
       appointment.sourceAppointmentLineId,
       field,
     );
@@ -884,7 +932,7 @@ export default function ContainerDashboard() {
 
     setEditingAppointmentCell({
       rowId: container.rowId,
-      sourceOrderDetailId: warehouseDetail.sourceOrderDetailId,
+      sourceOrderDetailId,
       sourceAppointmentLineId: appointment.sourceAppointmentLineId,
       field,
     });
@@ -908,9 +956,11 @@ export default function ContainerDashboard() {
     field: EditableWarehouseAppointmentField,
     value = appointmentDraft,
   ) {
+    const sourceOrderDetailId =
+      appointment.sourceOrderDetailId || warehouseDetail.sourceOrderDetailId;
     const key = getAppointmentCellKey(
       container.rowId,
-      warehouseDetail.sourceOrderDetailId,
+      sourceOrderDetailId,
       appointment.sourceAppointmentLineId,
       field,
     );
@@ -939,11 +989,11 @@ export default function ContainerDashboard() {
     if (mockLongTable) {
       applyUpdatedAppointment(
         container,
-        warehouseDetail.sourceOrderDetailId,
+        sourceOrderDetailId,
         appointment.sourceAppointmentLineId,
         {
-        ...appointment,
-        [field]: coerceAppointmentValue(field, nextValue),
+          ...appointment,
+          [field]: coerceAppointmentValue(field, nextValue),
         },
       );
       clearAppointmentCellSaving(key);
@@ -977,7 +1027,7 @@ export default function ContainerDashboard() {
         : {
             kind: "warehouseAppointment",
             sourceOrderId: container.sourceOrderId,
-            sourceOrderDetailId: warehouseDetail.sourceOrderDetailId,
+            sourceOrderDetailId,
             sourceAppointmentLineId: appointment.sourceAppointmentLineId,
             field,
             value: nextValue || null,
@@ -1006,7 +1056,7 @@ export default function ContainerDashboard() {
 
       applyUpdatedAppointment(
         container,
-        warehouseDetail.sourceOrderDetailId,
+        sourceOrderDetailId,
         appointment.sourceAppointmentLineId,
         updatedAppointment,
       );
@@ -1036,13 +1086,162 @@ export default function ContainerDashboard() {
           ? {
               ...row,
               warehouseDetails: row.warehouseDetails.map((detail) =>
-                detail.sourceOrderDetailId === sourceOrderDetailId
+                detail.sourceOrderDetailId === sourceOrderDetailId ||
+                detail.appointments.some(
+                  (appointment) =>
+                    appointment.sourceAppointmentLineId ===
+                    sourceAppointmentLineId,
+                )
                   ? {
                       ...detail,
                       appointments: detail.appointments.map((appointment) =>
                         appointment.sourceAppointmentLineId ===
                         sourceAppointmentLineId
-                          ? updatedAppointment
+                          ? mergeAppointmentUpdate(
+                              appointment,
+                              updatedAppointment,
+                            )
+                          : appointment,
+                      ),
+                    }
+                  : detail,
+              ),
+            }
+          : row,
+      ),
+    );
+  }
+
+  async function uploadAppointmentDocument({
+    container,
+    warehouseDetail,
+    appointment,
+    documentType,
+    file,
+  }: {
+    container: TableContainerRecord;
+    warehouseDetail: WarehouseDetail;
+    appointment: WarehouseAppointment;
+    documentType: AppointmentDocumentType;
+    file: File;
+  }) {
+    const sourceOrderDetailId =
+      appointment.sourceOrderDetailId || warehouseDetail.sourceOrderDetailId;
+    const key = getAppointmentDocumentKey(
+      container.rowId,
+      sourceOrderDetailId,
+      appointment.sourceAppointmentLineId,
+      documentType,
+    );
+    if (savingAppointmentDocumentKeysRef.current.has(key)) return;
+
+    const validationError = validateAppointmentDocumentFile(file);
+    if (validationError) {
+      setAppointmentDocumentErrors((current) => ({
+        ...current,
+        [key]: validationError,
+      }));
+      return;
+    }
+
+    if (mockLongTable) {
+      applyUpdatedAppointmentDocument(
+        container,
+        sourceOrderDetailId,
+        appointment.sourceAppointmentLineId,
+        documentType,
+        {
+          hasFile: true,
+          fileName: file.name || "document",
+          mimeType: file.type || guessDocumentMimeType(file.name),
+          fileSize: file.size,
+          uploadedAt: new Date().toISOString(),
+        },
+      );
+      return;
+    }
+
+    markAppointmentDocumentSaving(key);
+    setAppointmentDocumentErrors((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+
+    try {
+      const formData = new FormData();
+      formData.set("sourceOrderId", container.sourceOrderId);
+      formData.set("sourceOrderDetailId", sourceOrderDetailId);
+      formData.set(
+        "sourceAppointmentLineId",
+        appointment.sourceAppointmentLineId,
+      );
+      formData.set("documentType", documentType);
+      formData.set("file", file);
+
+      const response = await fetch("/api/containers/documents", {
+        method: "POST",
+        body: formData,
+      });
+      const payload = (await response.json()) as {
+        document?: AppointmentDocumentMeta;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.document) {
+        throw new Error(payload.error ?? "上传失败");
+      }
+
+      applyUpdatedAppointmentDocument(
+        container,
+        sourceOrderDetailId,
+        appointment.sourceAppointmentLineId,
+        documentType,
+        payload.document,
+      );
+    } catch (uploadError) {
+      setAppointmentDocumentErrors((current) => ({
+        ...current,
+        [key]: uploadError instanceof Error ? uploadError.message : "上传失败",
+      }));
+    } finally {
+      clearAppointmentDocumentSaving(key);
+    }
+  }
+
+  function applyUpdatedAppointmentDocument(
+    original: TableContainerRecord,
+    sourceOrderDetailId: string,
+    sourceAppointmentLineId: string,
+    documentType: AppointmentDocumentType,
+    document: AppointmentDocumentMeta,
+  ) {
+    setContainers((current) =>
+      current.map((row) =>
+        row.rowId === original.rowId
+          ? {
+              ...row,
+              warehouseDetails: row.warehouseDetails.map((detail) =>
+                detail.sourceOrderDetailId === sourceOrderDetailId ||
+                detail.appointments.some(
+                  (appointment) =>
+                    appointment.sourceAppointmentLineId ===
+                    sourceAppointmentLineId,
+                )
+                  ? {
+                      ...detail,
+                      appointments: detail.appointments.map((appointment) =>
+                        appointment.sourceAppointmentLineId ===
+                        sourceAppointmentLineId
+                          ? {
+                              ...appointment,
+                              sourceOrderDetailId:
+                                appointment.sourceOrderDetailId ||
+                                sourceOrderDetailId,
+                              [documentType === "pod"
+                                ? "podDocument"
+                                : "bolDocument"]: document,
+                            }
                           : appointment,
                       ),
                     }
@@ -1617,6 +1816,9 @@ export default function ContainerDashboard() {
     setAppointmentDraft("");
     setAppointmentCellErrors({});
     clearAllAppointmentSaving();
+    setAppointmentDocumentErrors({});
+    setSavingAppointmentDocuments(new Set());
+    savingAppointmentDocumentKeysRef.current.clear();
     setEditingWarehouseDetailCell(null);
     setWarehouseDetailDraft("");
     setWarehouseDetailCellErrors({});
@@ -2227,6 +2429,8 @@ export default function ContainerDashboard() {
                                                   <span>预约号码</span>
                                                   <span>送仓日</span>
                                                   <span>有效板数</span>
+                                                  <span>POD</span>
+                                                  <span>BOL</span>
                                                 </div>
                                                 {detail.appointments.map(
                                                   (
@@ -2250,7 +2454,10 @@ export default function ContainerDashboard() {
                                                             appointmentCellErrors[
                                                               getAppointmentCellKey(
                                                                 container.rowId,
-                                                                detail.sourceOrderDetailId,
+                                                                getAppointmentSourceDetailId(
+                                                                  appointment,
+                                                                  detail,
+                                                                ),
                                                                 appointment.sourceAppointmentLineId,
                                                                 "appointmentNumber",
                                                               )
@@ -2260,14 +2467,20 @@ export default function ContainerDashboard() {
                                                           isEditing={isEditingAppointmentCell(
                                                             editingAppointmentCell,
                                                             container.rowId,
-                                                            detail.sourceOrderDetailId,
+                                                            getAppointmentSourceDetailId(
+                                                              appointment,
+                                                              detail,
+                                                            ),
                                                             appointment.sourceAppointmentLineId,
                                                             "appointmentNumber",
                                                           )}
                                                           isSaving={savingAppointmentCells.has(
                                                             getAppointmentCellKey(
                                                               container.rowId,
-                                                              detail.sourceOrderDetailId,
+                                                              getAppointmentSourceDetailId(
+                                                                appointment,
+                                                                detail,
+                                                              ),
                                                               appointment.sourceAppointmentLineId,
                                                               "appointmentNumber",
                                                             ),
@@ -2311,7 +2524,10 @@ export default function ContainerDashboard() {
                                                             appointmentCellErrors[
                                                               getAppointmentCellKey(
                                                                 container.rowId,
-                                                                detail.sourceOrderDetailId,
+                                                                getAppointmentSourceDetailId(
+                                                                  appointment,
+                                                                  detail,
+                                                                ),
                                                                 appointment.sourceAppointmentLineId,
                                                                 "deliveryDate",
                                                               )
@@ -2321,14 +2537,20 @@ export default function ContainerDashboard() {
                                                           isEditing={isEditingAppointmentCell(
                                                             editingAppointmentCell,
                                                             container.rowId,
-                                                            detail.sourceOrderDetailId,
+                                                            getAppointmentSourceDetailId(
+                                                              appointment,
+                                                              detail,
+                                                            ),
                                                             appointment.sourceAppointmentLineId,
                                                             "deliveryDate",
                                                           )}
                                                           isSaving={savingAppointmentCells.has(
                                                             getAppointmentCellKey(
                                                               container.rowId,
-                                                              detail.sourceOrderDetailId,
+                                                              getAppointmentSourceDetailId(
+                                                                appointment,
+                                                                detail,
+                                                              ),
                                                               appointment.sourceAppointmentLineId,
                                                               "deliveryDate",
                                                             ),
@@ -2372,7 +2594,10 @@ export default function ContainerDashboard() {
                                                             appointmentCellErrors[
                                                               getAppointmentCellKey(
                                                                 container.rowId,
-                                                                detail.sourceOrderDetailId,
+                                                                getAppointmentSourceDetailId(
+                                                                  appointment,
+                                                                  detail,
+                                                                ),
                                                                 appointment.sourceAppointmentLineId,
                                                                 "effectivePallets",
                                                               )
@@ -2382,14 +2607,20 @@ export default function ContainerDashboard() {
                                                           isEditing={isEditingAppointmentCell(
                                                             editingAppointmentCell,
                                                             container.rowId,
-                                                            detail.sourceOrderDetailId,
+                                                            getAppointmentSourceDetailId(
+                                                              appointment,
+                                                              detail,
+                                                            ),
                                                             appointment.sourceAppointmentLineId,
                                                             "effectivePallets",
                                                           )}
                                                           isSaving={savingAppointmentCells.has(
                                                             getAppointmentCellKey(
                                                               container.rowId,
-                                                              detail.sourceOrderDetailId,
+                                                              getAppointmentSourceDetailId(
+                                                                appointment,
+                                                                detail,
+                                                              ),
                                                               appointment.sourceAppointmentLineId,
                                                               "effectivePallets",
                                                             ),
@@ -2416,6 +2647,114 @@ export default function ContainerDashboard() {
                                                               detail,
                                                               appointment,
                                                               "effectivePallets",
+                                                            )
+                                                          }
+                                                        />
+                                                      </div>
+                                                      <div>
+                                                        <AppointmentDocumentCell
+                                                          appointment={
+                                                            appointment
+                                                          }
+                                                          container={container}
+                                                          documentType="pod"
+                                                          document={
+                                                            appointment.podDocument
+                                                          }
+                                                          error={
+                                                            appointmentDocumentErrors[
+                                                              getAppointmentDocumentKey(
+                                                                container.rowId,
+                                                                getAppointmentSourceDetailId(
+                                                                  appointment,
+                                                                  detail,
+                                                                ),
+                                                                appointment.sourceAppointmentLineId,
+                                                                "pod",
+                                                              )
+                                                            ]
+                                                          }
+                                                          isAdmin={isAdmin}
+                                                          isUploading={savingAppointmentDocuments.has(
+                                                            getAppointmentDocumentKey(
+                                                              container.rowId,
+                                                              getAppointmentSourceDetailId(
+                                                                appointment,
+                                                                detail,
+                                                              ),
+                                                              appointment.sourceAppointmentLineId,
+                                                              "pod",
+                                                            ),
+                                                          )}
+                                                          sourceOrderDetailId={getAppointmentSourceDetailId(
+                                                            appointment,
+                                                            detail,
+                                                          )}
+                                                          onUpload={(file) =>
+                                                            uploadAppointmentDocument(
+                                                              {
+                                                                container,
+                                                                warehouseDetail:
+                                                                  detail,
+                                                                appointment,
+                                                                documentType:
+                                                                  "pod",
+                                                                file,
+                                                              },
+                                                            )
+                                                          }
+                                                        />
+                                                      </div>
+                                                      <div>
+                                                        <AppointmentDocumentCell
+                                                          appointment={
+                                                            appointment
+                                                          }
+                                                          container={container}
+                                                          documentType="bol"
+                                                          document={
+                                                            appointment.bolDocument
+                                                          }
+                                                          error={
+                                                            appointmentDocumentErrors[
+                                                              getAppointmentDocumentKey(
+                                                                container.rowId,
+                                                                getAppointmentSourceDetailId(
+                                                                  appointment,
+                                                                  detail,
+                                                                ),
+                                                                appointment.sourceAppointmentLineId,
+                                                                "bol",
+                                                              )
+                                                            ]
+                                                          }
+                                                          isAdmin={isAdmin}
+                                                          isUploading={savingAppointmentDocuments.has(
+                                                            getAppointmentDocumentKey(
+                                                              container.rowId,
+                                                              getAppointmentSourceDetailId(
+                                                                appointment,
+                                                                detail,
+                                                              ),
+                                                              appointment.sourceAppointmentLineId,
+                                                              "bol",
+                                                            ),
+                                                          )}
+                                                          sourceOrderDetailId={getAppointmentSourceDetailId(
+                                                            appointment,
+                                                            detail,
+                                                          )}
+                                                          onUpload={(file) =>
+                                                            uploadAppointmentDocument(
+                                                              {
+                                                                container,
+                                                                warehouseDetail:
+                                                                  detail,
+                                                                appointment,
+                                                                documentType:
+                                                                  "bol",
+                                                                file,
+                                                              },
                                                             )
                                                           }
                                                         />
@@ -2797,6 +3136,97 @@ function EditableAppointmentCell({
   );
 }
 
+function AppointmentDocumentCell({
+  appointment,
+  container,
+  document,
+  documentType,
+  error,
+  isAdmin,
+  isUploading,
+  onUpload,
+  sourceOrderDetailId,
+}: {
+  appointment: WarehouseAppointment;
+  container: TableContainerRecord;
+  document: AppointmentDocumentMeta;
+  documentType: AppointmentDocumentType;
+  error?: string;
+  isAdmin: boolean;
+  isUploading: boolean;
+  onUpload: (file: File) => void;
+  sourceOrderDetailId: string;
+}) {
+  const label = documentType.toUpperCase();
+  const canUpload = Boolean(
+    isAdmin &&
+      sourceOrderDetailId &&
+      appointment.sourceAppointmentLineId &&
+      !appointment.sourceAppointmentLineId.startsWith("legacy:"),
+  );
+
+  return (
+    <div className="documentCell">
+      {document.hasFile ? (
+        <a
+          className="documentViewLink"
+          href={getAppointmentDocumentUrl({
+            appointment,
+            container,
+            documentType,
+            sourceOrderDetailId,
+          })}
+          target="_blank"
+          rel="noreferrer"
+          title={document.fileName ?? `查看 ${label}`}
+        >
+          <FileText size={14} aria-hidden="true" />
+          查看
+        </a>
+      ) : (
+        <span className="documentEmpty">未上传</span>
+      )}
+      {canUpload ? (
+        <label
+          className={[
+            "documentUploadButton",
+            isUploading ? "isUploading" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          aria-label={`${document.hasFile ? "更换" : "上传"} ${label}`}
+          role="button"
+          tabIndex={isUploading ? -1 : 0}
+          title={`${document.hasFile ? "更换" : "上传"} ${label}`}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            event.currentTarget.querySelector("input")?.click();
+          }}
+        >
+          {isUploading ? (
+            <LoaderCircle className="cellSpinner" size={13} aria-hidden="true" />
+          ) : (
+            <Upload size={13} aria-hidden="true" />
+          )}
+          <span>{isUploading ? "上传中" : document.hasFile ? "更换" : "上传"}</span>
+          <input
+            accept="image/*,application/pdf"
+            disabled={isUploading}
+            type="file"
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = "";
+              if (file) onUpload(file);
+            }}
+          />
+        </label>
+      ) : null}
+      {error ? <span className="documentError">{error}</span> : null}
+    </div>
+  );
+}
+
 function DateValue({ value }: { value: string | null | undefined }) {
   const displayValue = valueOrDash(value);
 
@@ -3087,6 +3517,63 @@ function getAppointmentCellKey(
   return `${rowId}:${sourceOrderDetailId}:${sourceAppointmentLineId}:${field}`;
 }
 
+function getAppointmentDocumentKey(
+  rowId: string,
+  sourceOrderDetailId: string,
+  sourceAppointmentLineId: string,
+  documentType: AppointmentDocumentType,
+) {
+  return `${rowId}:${sourceOrderDetailId}:${sourceAppointmentLineId}:${documentType}`;
+}
+
+function getAppointmentSourceDetailId(
+  appointment: WarehouseAppointment,
+  warehouseDetail: WarehouseDetail,
+) {
+  return appointment.sourceOrderDetailId || warehouseDetail.sourceOrderDetailId;
+}
+
+function getAppointmentDocumentUrl({
+  appointment,
+  container,
+  documentType,
+  sourceOrderDetailId,
+}: {
+  appointment: WarehouseAppointment;
+  container: TableContainerRecord;
+  documentType: AppointmentDocumentType;
+  sourceOrderDetailId: string;
+}) {
+  const params = new URLSearchParams({
+    sourceOrderId: container.sourceOrderId,
+    sourceOrderDetailId,
+    sourceAppointmentLineId: appointment.sourceAppointmentLineId,
+    documentType,
+  });
+
+  return `/api/containers/documents?${params.toString()}`;
+}
+
+function validateAppointmentDocumentFile(file: File) {
+  if (!file.size) return "文件为空";
+  if (file.size > 10 * 1024 * 1024) return "文件不能超过 10MB";
+
+  const mimeType = file.type.toLowerCase();
+  const fileName = file.name.toLowerCase();
+  const isPdf = mimeType === "application/pdf" || fileName.endsWith(".pdf");
+  const isImage =
+    mimeType.startsWith("image/") ||
+    /\.(png|jpe?g|webp|gif|bmp|tiff?)$/i.test(file.name);
+
+  return isPdf || isImage ? "" : "只支持图片或 PDF";
+}
+
+function guessDocumentMimeType(fileName: string) {
+  return fileName.toLowerCase().endsWith(".pdf")
+    ? "application/pdf"
+    : "image/*";
+}
+
 function getWarehouseDetailKey(rowId: string, sourceOrderDetailId: string) {
   return `${rowId}:${sourceOrderDetailId}`;
 }
@@ -3248,6 +3735,7 @@ function legacyAppointmentToWarehouseAppointment(
   appointment: DeliveryAppointment,
 ): WarehouseAppointment {
   return {
+    sourceOrderDetailId: "",
     sourceAppointmentLineId: `legacy:${appointment.sourceAppointmentId}`,
     sourceAppointmentId: appointment.sourceAppointmentId,
     appointmentNumber: appointment.isaNumber,
@@ -3255,6 +3743,36 @@ function legacyAppointmentToWarehouseAppointment(
     estimatedPallets: appointment.palletCount,
     rejectedPallets: 0,
     effectivePallets: appointment.palletCount,
+    podDocument: emptyAppointmentDocument(),
+    bolDocument: emptyAppointmentDocument(),
+  };
+}
+
+function mergeAppointmentUpdate(
+  current: WarehouseAppointment,
+  updated: WarehouseAppointment,
+): WarehouseAppointment {
+  return {
+    ...current,
+    ...updated,
+    sourceOrderDetailId:
+      updated.sourceOrderDetailId || current.sourceOrderDetailId,
+    podDocument: updated.podDocument.hasFile
+      ? updated.podDocument
+      : current.podDocument,
+    bolDocument: updated.bolDocument.hasFile
+      ? updated.bolDocument
+      : current.bolDocument,
+  };
+}
+
+function emptyAppointmentDocument(): AppointmentDocumentMeta {
+  return {
+    hasFile: false,
+    fileName: null,
+    mimeType: null,
+    fileSize: null,
+    uploadedAt: null,
   };
 }
 
@@ -3403,6 +3921,7 @@ function createMockContainers(): TableContainerRecord[] {
       warehouseDetails: [
         createMockWarehouseDetail("mock-edge-2-detail-1", "FAT2", 12, [
           {
+            sourceOrderDetailId: "mock-edge-2-detail-1",
             sourceAppointmentLineId: "mock-edge-2-line-1",
             sourceAppointmentId: "mock-appointment-1",
             appointmentNumber: "ISA-LONG-001",
@@ -3410,6 +3929,8 @@ function createMockContainers(): TableContainerRecord[] {
             estimatedPallets: 12,
             rejectedPallets: 0,
             effectivePallets: 12,
+            podDocument: emptyAppointmentDocument(),
+            bolDocument: emptyAppointmentDocument(),
           },
         ]),
         createMockWarehouseDetail("mock-edge-2-detail-2", "HLI2", 8, []),
@@ -3560,6 +4081,7 @@ function createMockContainers(): TableContainerRecord[] {
               8,
               [
                 {
+                  sourceOrderDetailId: `mock-generated-${rowNumber}-detail-2`,
                   sourceAppointmentLineId: `mock-generated-${rowNumber}-line-1`,
                   sourceAppointmentId: `mock-generated-${rowNumber}-appointment-1`,
                   appointmentNumber: `ISA${rowNumber}001`,
@@ -3567,6 +4089,8 @@ function createMockContainers(): TableContainerRecord[] {
                   estimatedPallets: 6,
                   rejectedPallets: 1,
                   effectivePallets: 5,
+                  podDocument: emptyAppointmentDocument(),
+                  bolDocument: emptyAppointmentDocument(),
                 },
               ],
             ),

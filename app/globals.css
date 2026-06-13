@@ -1472,15 +1472,22 @@ body.rowDragActive * {
   background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .warehouseAppointmentHeader,
 .warehouseAppointmentItem {
   display: grid;
-  grid-template-columns: minmax(180px, 1.5fr) minmax(130px, 1fr) minmax(100px, 0.8fr);
+  grid-template-columns:
+    minmax(170px, 1.4fr)
+    minmax(120px, 0.9fr)
+    minmax(92px, 0.65fr)
+    minmax(130px, 0.85fr)
+    minmax(130px, 0.85fr);
   gap: 10px;
   align-items: center;
+  min-width: 720px;
 }
 
 .warehouseAppointmentHeader {
@@ -1496,6 +1503,64 @@ body.rowDragActive * {
   min-height: 42px;
   padding: 6px 12px;
   border-top: 1px solid #edf2f7;
+}
+
+.documentCell {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.documentViewLink,
+.documentUploadButton {
+  min-height: 28px;
+  border: 1px solid #d3e1f1;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #1268b3;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 0 8px;
+  text-decoration: none;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.documentViewLink:hover,
+.documentUploadButton:hover {
+  border-color: #a9c9ea;
+  background: #f5faff;
+}
+
+.documentUploadButton input {
+  display: none;
+}
+
+.documentUploadButton.isUploading {
+  color: #64748b;
+  cursor: wait;
+}
+
+.documentEmpty {
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.documentError {
+  flex-basis: 100%;
+  color: #c2410c;
+  font-size: 11px;
+  font-weight: 750;
 }
 
 .editableAppointmentCell {
@@ -1752,6 +1817,19 @@ body.rowDragActive * {
 
   .dateSeparator {
     display: none;
+  }
+
+  .detailsPanel {
+    padding: 12px 10px 14px 42px;
+  }
+
+  .warehouseDetailsContent {
+    min-width: 520px;
+  }
+
+  .warehouseAppointmentPanel {
+    margin: 0 10px 12px 36px;
+    padding: 10px;
   }
 
   .statusTabs {

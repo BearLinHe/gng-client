@@ -56,6 +56,7 @@ export type WarehouseDetail = {
 };
 
 export type WarehouseAppointment = {
+  sourceOrderDetailId: string;
   sourceAppointmentLineId: string;
   sourceAppointmentId: string | null;
   appointmentNumber: string | null;
@@ -63,6 +64,22 @@ export type WarehouseAppointment = {
   estimatedPallets: number | null;
   rejectedPallets: number | null;
   effectivePallets: number | null;
+  podDocument: AppointmentDocumentMeta;
+  bolDocument: AppointmentDocumentMeta;
+};
+
+export type AppointmentDocumentType = "pod" | "bol";
+
+export type AppointmentDocumentMeta = {
+  hasFile: boolean;
+  fileName: string | null;
+  mimeType: string | null;
+  fileSize: number | null;
+  uploadedAt: string | null;
+};
+
+export type AppointmentDocumentFile = AppointmentDocumentMeta & {
+  data: Buffer;
 };
 
 export type ContainerQueryResult = {
@@ -105,6 +122,7 @@ type ContainerRow = {
   warehouse_points: string | null;
   appointments: DeliveryAppointmentRow[] | null;
   warehouse_details: WarehouseDetailRow[] | null;
+  appointment_documents: AppointmentDocumentRow[] | null;
 };
 
 type DeliveryAppointmentRow = {
@@ -133,6 +151,7 @@ type WarehouseDetailRow = {
 };
 
 type WarehouseAppointmentRow = {
+  sourceOrderDetailId?: string | null;
   sourceAppointmentLineId: string | null;
   sourceAppointmentId: string | null;
   appointmentNumber: string | null;
@@ -140,6 +159,17 @@ type WarehouseAppointmentRow = {
   estimatedPallets: string | number | null;
   rejectedPallets: string | number | null;
   effectivePallets: string | number | null;
+};
+
+type AppointmentDocumentRow = {
+  sourceOrderDetailId: string | null;
+  sourceAppointmentLineId: string | null;
+  documentType: AppointmentDocumentType | string | null;
+  hasFile?: boolean | null;
+  fileName: string | null;
+  mimeType: string | null;
+  fileSize: string | number | null;
+  uploadedAt: Date | string | null;
 };
 
 type CustomerRow = {
@@ -596,7 +626,8 @@ export async function getContainers({
           coalesce(pc.manual_destination, pc.source_destination) as destination,
           coalesce(pc.manual_warehouse_points, pc.source_warehouse_points) as warehouse_points,
           coalesce(appointment_points.appointments, '[]'::jsonb) as appointments,
-          coalesce(warehouse_detail_points.warehouse_details, '[]'::jsonb) as warehouse_details
+          coalesce(warehouse_detail_points.warehouse_details, '[]'::jsonb) as warehouse_details,
+          coalesce(document_points.appointment_documents, '[]'::jsonb) as appointment_documents
         from public.portal_containers pc
         left join public.portal_customers c
           on c.source_customer_id = pc.source_customer_id
@@ -644,6 +675,7 @@ export async function getContainers({
           left join lateral (
             select jsonb_agg(
               jsonb_build_object(
+                'sourceOrderDetailId', pwa.source_order_detail_id,
                 'sourceAppointmentLineId', pwa.source_appointment_line_id,
                 'sourceAppointmentId', pwa.source_appointment_id,
                 'appointmentNumber', ${appWarehouseAppointmentColumns.appointmentNumber},
@@ -665,6 +697,26 @@ export async function getContainers({
           where pwd.source_order_id = pc.source_order_id
             and pwd.source_active = true
         ) warehouse_detail_points on true
+        left join lateral (
+          select jsonb_agg(
+            jsonb_build_object(
+              'sourceOrderDetailId', pwd_doc.source_order_detail_id,
+              'sourceAppointmentLineId', pwd_doc.source_appointment_line_id,
+              'documentType', pwd_doc.document_type,
+              'hasFile', pwd_doc.file_data is not null,
+              'fileName', pwd_doc.file_name,
+              'mimeType', pwd_doc.mime_type,
+              'fileSize', pwd_doc.file_size,
+              'uploadedAt', pwd_doc.uploaded_at
+            )
+            order by
+              pwd_doc.source_order_detail_id asc,
+              pwd_doc.source_appointment_line_id asc,
+              pwd_doc.document_type asc
+          ) as appointment_documents
+          from public.portal_warehouse_appointment_documents pwd_doc
+          where pwd_doc.source_order_id = pc.source_order_id
+        ) document_points on true
         ${dataWhereClause}
         order by
           ${appDateFilterColumns.orderDate} desc nulls last,
@@ -902,6 +954,187 @@ export async function updateWarehouseAppointmentDetail({
   });
 }
 
+export async function saveWarehouseAppointmentDocument({
+  customerId,
+  sourceOrderId,
+  sourceOrderDetailId,
+  sourceAppointmentLineId,
+  documentType,
+  fileName,
+  mimeType,
+  fileSize,
+  data,
+}: {
+  customerId: string;
+  sourceOrderId: string;
+  sourceOrderDetailId: string;
+  sourceAppointmentLineId: string;
+  documentType: AppointmentDocumentType;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  data: Buffer;
+}): Promise<AppointmentDocumentMeta | null> {
+  return withAppTransaction(async (client) => {
+    const result = await client.query<{
+      hasFile: boolean;
+      fileName: string | null;
+      mimeType: string | null;
+      fileSize: string | number | null;
+      uploadedAt: Date | string | null;
+    }>(
+      `
+        insert into public.portal_warehouse_appointment_documents (
+          source_order_id,
+          source_order_detail_id,
+          source_appointment_line_id,
+          document_type,
+          file_name,
+          mime_type,
+          file_size,
+          file_data,
+          uploaded_at,
+          updated_at
+        )
+        select
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          $7,
+          $8,
+          now(),
+          now()
+        where exists (
+          select 1
+          from public.portal_containers pc
+          join public.portal_warehouse_appointments pwa
+            on pwa.source_order_id = pc.source_order_id
+           and pwa.source_order_detail_id = $2
+           and pwa.source_appointment_line_id = $3
+           and pwa.source_active = true
+          where pc.source_order_id = $1
+            and pc.source_customer_id = $9
+            and pc.source_active = true
+        )
+        on conflict (
+          source_order_id,
+          source_order_detail_id,
+          source_appointment_line_id,
+          document_type
+        )
+        do update set
+          file_name = excluded.file_name,
+          mime_type = excluded.mime_type,
+          file_size = excluded.file_size,
+          file_data = excluded.file_data,
+          uploaded_at = now(),
+          updated_at = now()
+        returning
+          true as "hasFile",
+          file_name as "fileName",
+          mime_type as "mimeType",
+          file_size as "fileSize",
+          uploaded_at as "uploadedAt"
+      `,
+      [
+        sourceOrderId,
+        sourceOrderDetailId,
+        sourceAppointmentLineId,
+        documentType,
+        fileName,
+        mimeType,
+        fileSize,
+        data,
+        customerId,
+      ],
+    );
+    const document = rows(result)[0];
+
+    if (!document) return null;
+
+    return toAppointmentDocumentMeta({
+      sourceOrderDetailId,
+      sourceAppointmentLineId,
+      documentType,
+      hasFile: document.hasFile,
+      fileName: document.fileName,
+      mimeType: document.mimeType,
+      fileSize: document.fileSize,
+      uploadedAt: document.uploadedAt,
+    });
+  });
+}
+
+export async function getWarehouseAppointmentDocument({
+  customerId,
+  sourceOrderId,
+  sourceOrderDetailId,
+  sourceAppointmentLineId,
+  documentType,
+}: {
+  customerId: string;
+  sourceOrderId: string;
+  sourceOrderDetailId: string;
+  sourceAppointmentLineId: string;
+  documentType: AppointmentDocumentType;
+}): Promise<AppointmentDocumentFile | null> {
+  return withAppReadOnlyTransaction(async (client) => {
+    const result = await client.query<{
+      fileName: string | null;
+      mimeType: string | null;
+      fileSize: string | number | null;
+      uploadedAt: Date | string | null;
+      data: Buffer;
+    }>(
+      `
+        select
+          pwd.file_name as "fileName",
+          pwd.mime_type as "mimeType",
+          pwd.file_size as "fileSize",
+          pwd.uploaded_at as "uploadedAt",
+          pwd.file_data as data
+        from public.portal_warehouse_appointment_documents pwd
+        join public.portal_containers pc
+          on pc.source_order_id = pwd.source_order_id
+        join public.portal_warehouse_appointments pwa
+          on pwa.source_order_id = pwd.source_order_id
+         and pwa.source_order_detail_id = pwd.source_order_detail_id
+         and pwa.source_appointment_line_id = pwd.source_appointment_line_id
+         and pwa.source_active = true
+        where pwd.source_order_id = $1
+          and pwd.source_order_detail_id = $2
+          and pwd.source_appointment_line_id = $3
+          and pwd.document_type = $4
+          and pc.source_customer_id = $5
+          and pc.source_active = true
+        limit 1
+      `,
+      [
+        sourceOrderId,
+        sourceOrderDetailId,
+        sourceAppointmentLineId,
+        documentType,
+        customerId,
+      ],
+    );
+    const document = rows(result)[0];
+
+    if (!document) return null;
+
+    return {
+      hasFile: true,
+      fileName: document.fileName,
+      mimeType: document.mimeType,
+      fileSize: toNullableNumber(document.fileSize),
+      uploadedAt: formatDateTime(document.uploadedAt),
+      data: document.data,
+    };
+  });
+}
+
 export async function getSourceCustomers(): Promise<CustomerOption[]> {
   return withSourceReadOnlyTransaction(async (client) => {
     const result = await client.query<CustomerRow>(`
@@ -1052,7 +1285,8 @@ export async function getSourceContainers({
           ) as destination,
           detail_points.warehouse_points,
           appointment_points.appointments,
-          null::jsonb as warehouse_details
+          null::jsonb as warehouse_details,
+          null::jsonb as appointment_documents
         ${baseFrom}
           ${dataWhereClause}
         order by
@@ -1080,9 +1314,13 @@ export async function getSourceContainers({
 
 function toContainerRecord(row: ContainerRow): ContainerRecord {
   const appointments = (row.appointments ?? []).map(toDeliveryAppointment);
+  const appointmentDocuments = buildAppointmentDocumentMap(
+    row.appointment_documents ?? [],
+  );
   const warehouseDetails = buildWarehouseDetails(
     (row.warehouse_details ?? []).map(toWarehouseDetail),
     appointments,
+    appointmentDocuments,
   );
 
   return {
@@ -1140,6 +1378,7 @@ function toWarehouseAppointment(
   appointment: WarehouseAppointmentRow,
 ): WarehouseAppointment {
   return {
+    sourceOrderDetailId: appointment.sourceOrderDetailId ?? "",
     sourceAppointmentLineId: appointment.sourceAppointmentLineId ?? "",
     sourceAppointmentId: appointment.sourceAppointmentId,
     appointmentNumber: appointment.appointmentNumber,
@@ -1147,12 +1386,40 @@ function toWarehouseAppointment(
     estimatedPallets: toNullableNumber(appointment.estimatedPallets),
     rejectedPallets: toNullableNumber(appointment.rejectedPallets),
     effectivePallets: toNullableNumber(appointment.effectivePallets),
+    podDocument: emptyAppointmentDocument(),
+    bolDocument: emptyAppointmentDocument(),
   };
+}
+
+function buildAppointmentDocumentMap(documents: AppointmentDocumentRow[]) {
+  const documentMap = new Map<string, AppointmentDocumentMeta>();
+
+  for (const document of documents) {
+    if (
+      !document.sourceOrderDetailId ||
+      !document.sourceAppointmentLineId ||
+      (document.documentType !== "pod" && document.documentType !== "bol")
+    ) {
+      continue;
+    }
+
+    documentMap.set(
+      getAppointmentDocumentMapKey(
+        document.sourceOrderDetailId,
+        document.sourceAppointmentLineId,
+        document.documentType,
+      ),
+      toAppointmentDocumentMeta(document),
+    );
+  }
+
+  return documentMap;
 }
 
 function buildWarehouseDetails(
   details: WarehouseDetail[],
   appointments: DeliveryAppointment[],
+  documentMap: Map<string, AppointmentDocumentMeta>,
 ): WarehouseDetail[] {
   const appointmentById = new Map(
     appointments.map((appointment) => [
@@ -1168,7 +1435,11 @@ function buildWarehouseDetails(
       if (appointment.sourceAppointmentId) {
         existingAppointmentIds.add(appointment.sourceAppointmentId);
       }
-      return appointment;
+      return attachAppointmentDocuments(
+        detail.sourceOrderDetailId,
+        appointment,
+        documentMap,
+      );
     });
     const fallbackPoint = detailAppointments
       .map((appointment) =>
@@ -1222,14 +1493,27 @@ function buildWarehouseDetails(
         fba: null,
         notes: null,
         po: null,
-        appointments: [warehouseAppointment],
+        appointments: [
+          attachAppointmentDocuments(
+            `legacy:${appointment.sourceAppointmentId}`,
+            warehouseAppointment,
+            documentMap,
+          ),
+        ],
       });
       continue;
     }
 
     groupedDetails.set(key, {
       ...existing,
-      appointments: [...existing.appointments, warehouseAppointment],
+      appointments: [
+        ...existing.appointments,
+        attachAppointmentDocuments(
+          existing.sourceOrderDetailId,
+          warehouseAppointment,
+          documentMap,
+        ),
+      ],
     });
   }
 
@@ -1237,6 +1521,33 @@ function buildWarehouseDetails(
     ...detail,
     appointments: detail.appointments.sort(compareWarehouseAppointments),
   }));
+}
+
+function attachAppointmentDocuments(
+  sourceOrderDetailId: string,
+  appointment: WarehouseAppointment,
+  documentMap: Map<string, AppointmentDocumentMeta>,
+): WarehouseAppointment {
+  return {
+    ...appointment,
+    sourceOrderDetailId,
+    podDocument:
+      documentMap.get(
+        getAppointmentDocumentMapKey(
+          sourceOrderDetailId,
+          appointment.sourceAppointmentLineId,
+          "pod",
+        ),
+      ) ?? emptyAppointmentDocument(),
+    bolDocument:
+      documentMap.get(
+        getAppointmentDocumentMapKey(
+          sourceOrderDetailId,
+          appointment.sourceAppointmentLineId,
+          "bol",
+        ),
+      ) ?? emptyAppointmentDocument(),
+  };
 }
 
 function mergeWarehouseDetails(
@@ -1277,6 +1588,7 @@ function legacyAppointmentToWarehouseAppointment(
   appointment: DeliveryAppointment,
 ): WarehouseAppointment {
   return {
+    sourceOrderDetailId: "",
     sourceAppointmentLineId: `legacy:${appointment.sourceAppointmentId}`,
     sourceAppointmentId: appointment.sourceAppointmentId,
     appointmentNumber: appointment.isaNumber,
@@ -1284,7 +1596,39 @@ function legacyAppointmentToWarehouseAppointment(
     estimatedPallets: appointment.palletCount,
     rejectedPallets: 0,
     effectivePallets: appointment.palletCount,
+    podDocument: emptyAppointmentDocument(),
+    bolDocument: emptyAppointmentDocument(),
   };
+}
+
+function toAppointmentDocumentMeta(
+  document: AppointmentDocumentRow,
+): AppointmentDocumentMeta {
+  return {
+    hasFile: Boolean(document.hasFile),
+    fileName: document.fileName,
+    mimeType: document.mimeType,
+    fileSize: toNullableNumber(document.fileSize),
+    uploadedAt: formatDateTime(document.uploadedAt),
+  };
+}
+
+function emptyAppointmentDocument(): AppointmentDocumentMeta {
+  return {
+    hasFile: false,
+    fileName: null,
+    mimeType: null,
+    fileSize: null,
+    uploadedAt: null,
+  };
+}
+
+function getAppointmentDocumentMapKey(
+  sourceOrderDetailId: string,
+  sourceAppointmentLineId: string,
+  documentType: AppointmentDocumentType,
+) {
+  return `${sourceOrderDetailId}:${sourceAppointmentLineId}:${documentType}`;
 }
 
 function compareWarehouseAppointments(

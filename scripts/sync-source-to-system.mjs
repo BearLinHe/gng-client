@@ -709,6 +709,25 @@ async function ensureSystemSchema(client) {
       primary key (source_order_id, source_order_detail_id, source_appointment_line_id)
     );
 
+    create table if not exists public.portal_warehouse_appointment_documents (
+      source_order_id text not null references public.portal_containers(source_order_id) on delete cascade,
+      source_order_detail_id text not null,
+      source_appointment_line_id text not null,
+      document_type text not null check (document_type in ('pod', 'bol')),
+      file_name text not null,
+      mime_type text not null,
+      file_size integer not null,
+      file_data bytea not null,
+      uploaded_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      primary key (
+        source_order_id,
+        source_order_detail_id,
+        source_appointment_line_id,
+        document_type
+      )
+    );
+
     create table if not exists public.portal_customer_passwords (
       customer_code_normalized text primary key,
       password_hash text not null,
@@ -744,6 +763,14 @@ async function ensureSystemSchema(client) {
       on public.portal_warehouse_appointments(source_order_detail_id);
     create index if not exists portal_warehouse_appointments_active_idx
       on public.portal_warehouse_appointments(source_active);
+    create index if not exists portal_warehouse_appointment_documents_order_idx
+      on public.portal_warehouse_appointment_documents(source_order_id);
+    create index if not exists portal_warehouse_appointment_documents_lookup_idx
+      on public.portal_warehouse_appointment_documents(
+        source_order_id,
+        source_order_detail_id,
+        source_appointment_line_id
+      );
   `);
 
   await client.query(`
