@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { readCustomerSession } from "@/lib/auth";
 import { syncSourceToSystem } from "@/lib/source-sync.mjs";
 
 export const dynamic = "force-dynamic";
@@ -90,13 +91,13 @@ function validateSyncRequest(request: NextRequest) {
 
   if (isVercelCron) return null;
 
+  const customer = readCustomerSession(request);
+  if (customer?.role === "admin") return null;
+
   if (!syncSecret) {
     if (process.env.NODE_ENV !== "production") return null;
 
-    return NextResponse.json(
-      { error: "SYNC_SECRET or CRON_SECRET is not configured" },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const authorization = request.headers.get("authorization");

@@ -725,6 +725,11 @@ h2 {
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
 }
 
+.iconButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .iconButton:focus-visible {
   outline: none;
   box-shadow: 0 0 0 3px rgba(18, 104, 179, 0.16);

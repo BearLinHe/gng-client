@@ -185,6 +185,8 @@ export default function ContainerDashboard() {
   const [syncStatus, setSyncStatus] = useState<SyncRunStatus | null>(null);
   const [syncStatusState, setSyncStatusState] = useState<LoadState>("idle");
   const [syncStatusMessage, setSyncStatusMessage] = useState("");
+  const [syncActionState, setSyncActionState] = useState<LoadState>("idle");
+  const [syncStatusTick, setSyncStatusTick] = useState(0);
   const [containers, setContainers] = useState<TableContainerRecord[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [allContainers, setAllContainers] = useState(0);
@@ -420,7 +422,17 @@ export default function ContainerDashboard() {
     return () => {
       ignore = true;
     };
-  }, [customer, mockLongTable, refreshTick]);
+  }, [customer, mockLongTable, refreshTick, syncStatusTick]);
+
+  useEffect(() => {
+    if (customer?.role !== "admin" || mockLongTable) return;
+
+    const intervalId = window.setInterval(() => {
+      setSyncStatusTick((value) => value + 1);
+    }, 60000);
+
+    return () => window.clearInterval(intervalId);
+  }, [customer, mockLongTable]);
 
   useEffect(() => {
     let ignore = false;
@@ -638,6 +650,7 @@ export default function ContainerDashboard() {
   const syncStatusClass = `syncStatusPill ${getSyncStatusTone(
     syncStatus,
     syncStatusState,
+    syncActionState,
   )}`;
   const hasActiveFilters =
     Boolean(searchInput.trim() || search || selectedOperationMode || dateFrom || dateTo) ||
@@ -657,6 +670,54 @@ export default function ContainerDashboard() {
   function refreshContainers() {
     setPage(1);
     setRefreshTick((value) => value + 1);
+  }
+
+  async function runSourceSync() {
+    if (!isAdmin || syncActionState === "loading") return;
+
+    setSyncActionState("loading");
+    setSyncStatusMessage("正在同步源数据库");
+
+    if (mockLongTable) {
+      setSyncStatus({
+        id: "mock-sync",
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        status: "success",
+        customerCount: 108,
+        containerCount: 4739,
+        appointmentCount: 19274,
+        message: null,
+      });
+      setSyncActionState("idle");
+      setSyncStatusMessage("同步完成");
+      refreshContainers();
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/admin/sync", { method: "POST" });
+      const payload = (await response.json()) as {
+        error?: string;
+        message?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? payload.message ?? "同步失败");
+      }
+
+      setSyncActionState("idle");
+      setSyncStatusMessage("同步完成，数据已刷新");
+      setPage(1);
+      setRefreshTick((value) => value + 1);
+      setSyncStatusTick((value) => value + 1);
+    } catch (syncError) {
+      setSyncActionState("error");
+      setSyncStatusMessage(
+        syncError instanceof Error ? syncError.message : "同步失败",
+      );
+      setSyncStatusTick((value) => value + 1);
+    }
   }
 
   async function handleSaveBalance(event: FormEvent<HTMLFormElement>) {
@@ -2364,17 +2425,42 @@ export default function ContainerDashboard() {
               <div>
                 <span>同步状态</span>
                 <strong>
-                  {syncStatusState === "loading"
-                    ? "读取中"
+                  {syncActionState === "loading"
+                    ? "同步中"
+                    : syncStatusState === "loading"
+                      ? "读取中"
+                      : syncStatusState === "error"
+                        ? "失败"
                     : getSyncStatusLabel(syncStatus)}
                 </strong>
               </div>
               <small>
-                {syncStatus
+                {syncStatusMessage
+                  ? syncStatusMessage
+                  : syncStatus
                   ? `${formatSyncTime(syncStatus.finishedAt ?? syncStatus.startedAt)} · 柜号 ${syncStatus.containerCount}`
-                  : syncStatusMessage || "暂无同步记录"}
+                    : "暂无同步记录"}
               </small>
             </div>
+          ) : null}
+          {isAdmin ? (
+            <button
+              className="iconButton"
+              type="button"
+              onClick={runSourceSync}
+              disabled={syncActionState === "loading"}
+            >
+              {syncActionState === "loading" ? (
+                <LoaderCircle
+                  className="buttonSpinner"
+                  size={16}
+                  aria-hidden="true"
+                />
+              ) : (
+                <RefreshCw size={16} aria-hidden="true" />
+              )}
+              立即同步
+            </button>
           ) : null}
           <button className="iconButton" type="button" onClick={refreshContainers}>
             <RefreshCw size={16} aria-hidden="true" />
@@ -3947,7 +4033,10 @@ function getSyncStatusLabel(syncStatus: SyncRunStatus | null) {
 function getSyncStatusTone(
   syncStatus: SyncRunStatus | null,
   loadState: LoadState,
+  actionState: LoadState,
 ) {
+  if (actionState === "error") return "isError";
+  if (actionState === "loading") return "isMuted";
   if (loadState === "error") return "isError";
   if (!syncStatus) return "isMuted";
   if (syncStatus.status === "success") return "isSuccess";
