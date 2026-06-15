@@ -59,6 +59,17 @@ type CustomerBalance = {
   updatedAt: string | null;
 };
 
+type SyncRunStatus = {
+  id: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  status: string;
+  customerCount: number;
+  containerCount: number;
+  appointmentCount: number;
+  message: string | null;
+};
+
 type ContainerRecord = {
   sourceOrderId: string;
   containerNumber: string;
@@ -171,6 +182,9 @@ export default function ContainerDashboard() {
   const [balanceDraft, setBalanceDraft] = useState("");
   const [balanceState, setBalanceState] = useState<LoadState>("idle");
   const [balanceMessage, setBalanceMessage] = useState("");
+  const [syncStatus, setSyncStatus] = useState<SyncRunStatus | null>(null);
+  const [syncStatusState, setSyncStatusState] = useState<LoadState>("idle");
+  const [syncStatusMessage, setSyncStatusMessage] = useState("");
   const [containers, setContainers] = useState<TableContainerRecord[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [allContainers, setAllContainers] = useState(0);
@@ -409,6 +423,68 @@ export default function ContainerDashboard() {
   }, [customer, mockLongTable, refreshTick]);
 
   useEffect(() => {
+    let ignore = false;
+
+    if (customer?.role !== "admin") {
+      setSyncStatus(null);
+      setSyncStatusState("idle");
+      setSyncStatusMessage("");
+      return;
+    }
+
+    if (mockLongTable) {
+      setSyncStatus({
+        id: "mock-sync",
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        status: "success",
+        customerCount: 108,
+        containerCount: 4739,
+        appointmentCount: 19274,
+        message: null,
+      });
+      setSyncStatusState("idle");
+      setSyncStatusMessage("");
+      return;
+    }
+
+    async function loadSyncStatus() {
+      setSyncStatusState("loading");
+      setSyncStatusMessage("");
+
+      const response = await fetch("/api/admin/sync/status");
+      const payload = (await response.json()) as {
+        syncRun?: SyncRunStatus | null;
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? "同步状态读取失败");
+      }
+
+      if (!ignore) {
+        setSyncStatus(payload.syncRun ?? null);
+        setSyncStatusState("idle");
+      }
+    }
+
+    loadSyncStatus().catch((statusError) => {
+      if (!ignore) {
+        setSyncStatusState("error");
+        setSyncStatusMessage(
+          statusError instanceof Error
+            ? statusError.message
+            : "同步状态读取失败",
+        );
+      }
+    });
+
+    return () => {
+      ignore = true;
+    };
+  }, [customer, mockLongTable, refreshTick]);
+
+  useEffect(() => {
     const handle = window.setTimeout(() => setSearch(searchInput.trim()), 250);
     return () => window.clearTimeout(handle);
   }, [searchInput]);
@@ -558,6 +634,10 @@ export default function ContainerDashboard() {
   const isAdmin = customer?.role === "admin";
   const balanceAmountClass = `balanceAmount ${getBalanceTone(
     customerBalance?.balanceDueUsd,
+  )}`;
+  const syncStatusClass = `syncStatusPill ${getSyncStatusTone(
+    syncStatus,
+    syncStatusState,
   )}`;
   const hasActiveFilters =
     Boolean(searchInput.trim() || search || selectedOperationMode || dateFrom || dateTo) ||
@@ -2278,6 +2358,24 @@ export default function ContainerDashboard() {
           </div>
         </div>
         <div className="topActions">
+          {isAdmin ? (
+            <div className={syncStatusClass} title={getSyncStatusTitle(syncStatus)}>
+              <span className="syncStatusDot" aria-hidden="true" />
+              <div>
+                <span>同步状态</span>
+                <strong>
+                  {syncStatusState === "loading"
+                    ? "读取中"
+                    : getSyncStatusLabel(syncStatus)}
+                </strong>
+              </div>
+              <small>
+                {syncStatus
+                  ? `${formatSyncTime(syncStatus.finishedAt ?? syncStatus.startedAt)} · 柜号 ${syncStatus.containerCount}`
+                  : syncStatusMessage || "暂无同步记录"}
+              </small>
+            </div>
+          ) : null}
           <button className="iconButton" type="button" onClick={refreshContainers}>
             <RefreshCw size={16} aria-hidden="true" />
             刷新
@@ -3836,6 +3934,55 @@ function formatUsd(value: string | null | undefined) {
 function getBalanceTone(value: string | null | undefined) {
   const amount = Number(value ?? 0);
   return Number.isFinite(amount) && amount > 50000 ? "isDanger" : "isWarning";
+}
+
+function getSyncStatusLabel(syncStatus: SyncRunStatus | null) {
+  if (!syncStatus) return "暂无记录";
+  if (syncStatus.status === "success") return "成功";
+  if (syncStatus.status === "error") return "失败";
+  if (syncStatus.status === "skipped") return "跳过";
+  return syncStatus.status;
+}
+
+function getSyncStatusTone(
+  syncStatus: SyncRunStatus | null,
+  loadState: LoadState,
+) {
+  if (loadState === "error") return "isError";
+  if (!syncStatus) return "isMuted";
+  if (syncStatus.status === "success") return "isSuccess";
+  if (syncStatus.status === "error") return "isError";
+  return "isMuted";
+}
+
+function getSyncStatusTitle(syncStatus: SyncRunStatus | null) {
+  if (!syncStatus) return "暂无同步记录";
+
+  const lines = [
+    `状态：${getSyncStatusLabel(syncStatus)}`,
+    `开始：${formatSyncTime(syncStatus.startedAt)}`,
+    `结束：${formatSyncTime(syncStatus.finishedAt)}`,
+    `客户：${syncStatus.customerCount}`,
+    `柜号：${syncStatus.containerCount}`,
+    `预约：${syncStatus.appointmentCount}`,
+  ];
+
+  if (syncStatus.message) lines.push(`信息：${syncStatus.message}`);
+  return lines.join("\n");
+}
+
+function formatSyncTime(value: string | null) {
+  if (!value) return "未完成";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "时间未知";
+
+  return new Intl.DateTimeFormat("zh-CN", {
+    day: "2-digit",
+    hour: "2-digit",
+    hour12: false,
+    minute: "2-digit",
+    month: "2-digit",
+  }).format(date);
 }
 
 function formatPercentValue(value: string | null | undefined) {
