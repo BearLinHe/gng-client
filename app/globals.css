@@ -1385,7 +1385,7 @@ body.rowDragActive * {
 .warehouseDetailListHeader,
 .warehouseDetailSummary {
   display: grid;
-  grid-template-columns: 34px minmax(220px, 1fr) 132px 86px;
+  grid-template-columns: 34px minmax(190px, 1fr) minmax(132px, 0.55fr) 132px 86px;
   gap: 10px;
   align-items: center;
 }
@@ -1411,6 +1411,10 @@ body.rowDragActive * {
   grid-column: 4;
 }
 
+.warehouseDetailListHeader span:nth-child(4) {
+  grid-column: 5;
+}
+
 .warehouseDetailItem {
   border-bottom: 1px solid #e8eef5;
 }
@@ -1432,6 +1436,7 @@ body.rowDragActive * {
 }
 
 .warehousePointCell,
+.warehouseWindowCell,
 .warehousePalletCell,
 .warehouseAppointmentItem > div {
   min-width: 0;
@@ -1439,6 +1444,12 @@ body.rowDragActive * {
 
 .warehousePointText {
   font-weight: 750;
+}
+
+.warehouseWindowText {
+  color: #52657a;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .appointmentCountBadge {

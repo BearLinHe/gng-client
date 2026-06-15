@@ -43,6 +43,7 @@ export type WarehouseDetail = {
   sourceOrderDetailId: string;
   deliveryNature: string | null;
   warehousePoint: string;
+  windowPeriod: string | null;
   volume: string | null;
   estimatedPallets: number | null;
   volumePercentage: string | null;
@@ -139,6 +140,7 @@ type WarehouseDetailRow = {
   sourceOrderDetailId: string | null;
   deliveryNature: string | null;
   warehousePoint: string | null;
+  windowPeriod: string | null;
   volume: string | number | null;
   estimatedPallets: string | number | null;
   volumePercentage: string | number | null;
@@ -544,6 +546,7 @@ export async function getContainers({
           and pwd_search.source_active = true
           and (
             coalesce(pwd_search.source_warehouse_point, '') ilike $${params.length}
+            or coalesce(pwd_search.source_window_period, '') ilike $${params.length}
             or coalesce(pwd_search.source_warehouse_location, '') ilike $${params.length}
             or coalesce(pwd_search.source_fba, '') ilike $${params.length}
             or coalesce(pwd_search.source_notes, '') ilike $${params.length}
@@ -666,6 +669,7 @@ export async function getContainers({
               'sourceOrderDetailId', pwd.source_order_detail_id,
               'deliveryNature', pwd.source_delivery_nature,
               'warehousePoint', pwd.source_warehouse_point,
+              'windowPeriod', pwd.source_window_period,
               'volume', pwd.source_volume,
               'estimatedPallets', pwd.source_estimated_pallets,
               'volumePercentage', pwd.source_volume_percentage,
@@ -1492,6 +1496,7 @@ function toWarehouseDetail(detail: WarehouseDetailRow): WarehouseDetail {
     sourceOrderDetailId: detail.sourceOrderDetailId ?? "",
     deliveryNature: detail.deliveryNature,
     warehousePoint: detail.warehousePoint ?? "未设置仓点",
+    windowPeriod: detail.windowPeriod,
     volume: formatDecimal(detail.volume),
     estimatedPallets: toNullableNumber(detail.estimatedPallets),
     volumePercentage: formatDecimal(detail.volumePercentage),
@@ -1615,6 +1620,7 @@ function buildWarehouseDetails(
         sourceOrderDetailId: `legacy:${appointment.sourceAppointmentId}`,
         deliveryNature: null,
         warehousePoint,
+        windowPeriod: null,
         volume: null,
         estimatedPallets: appointment.palletCount,
         volumePercentage: null,
@@ -1690,6 +1696,7 @@ function mergeWarehouseDetails(
     ...current,
     sourceOrderDetailId: `${current.sourceOrderDetailId},${next.sourceOrderDetailId}`,
     deliveryNature: mergeText(current.deliveryNature, next.deliveryNature),
+    windowPeriod: mergeText(current.windowPeriod, next.windowPeriod),
     volume: sumDecimalStrings(current.volume, next.volume),
     estimatedPallets: sumNullable(
       current.estimatedPallets,

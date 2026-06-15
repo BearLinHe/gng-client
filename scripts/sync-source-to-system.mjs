@@ -243,6 +243,7 @@ const warehouseDetailQuery = `
       od.delivery_location_id::text,
       '未设置仓点'
     ) as warehouse_point,
+    nullif(od.window_period, '') as window_period,
     od.volume::text as volume,
     od.estimated_pallets,
     od.volume_percentage::text as volume_percentage,
@@ -670,6 +671,7 @@ async function ensureSystemSchema(client) {
       source_order_detail_id text primary key,
       source_delivery_nature text,
       source_warehouse_point text,
+      source_window_period text,
       source_volume numeric,
       source_estimated_pallets integer,
       source_volume_percentage numeric,
@@ -814,6 +816,7 @@ async function ensureSystemSchema(client) {
     alter table public.portal_warehouse_details
       add column if not exists manual_actual_pallets integer,
       add column if not exists manual_actual_pallets_override boolean not null default false,
+      add column if not exists source_window_period text,
       add column if not exists source_active boolean not null default true;
   `);
 }
@@ -1022,6 +1025,7 @@ async function upsertWarehouseDetails(client, details) {
           source_order_detail_id,
           source_delivery_nature,
           source_warehouse_point,
+          source_window_period,
           source_volume,
           source_estimated_pallets,
           source_volume_percentage,
@@ -1041,6 +1045,7 @@ async function upsertWarehouseDetails(client, details) {
           source_order_detail_id,
           delivery_nature,
           warehouse_point,
+          window_period,
           volume::numeric,
           estimated_pallets,
           volume_percentage::numeric,
@@ -1059,6 +1064,7 @@ async function upsertWarehouseDetails(client, details) {
           source_order_detail_id text,
           delivery_nature text,
           warehouse_point text,
+          window_period text,
           volume text,
           estimated_pallets integer,
           volume_percentage text,
@@ -1075,6 +1081,7 @@ async function upsertWarehouseDetails(client, details) {
           source_order_id = excluded.source_order_id,
           source_delivery_nature = excluded.source_delivery_nature,
           source_warehouse_point = excluded.source_warehouse_point,
+          source_window_period = excluded.source_window_period,
           source_volume = excluded.source_volume,
           source_estimated_pallets = excluded.source_estimated_pallets,
           source_volume_percentage = excluded.source_volume_percentage,

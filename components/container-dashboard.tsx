@@ -104,6 +104,7 @@ type WarehouseDetail = {
   sourceOrderDetailId: string;
   deliveryNature: string | null;
   warehousePoint: string;
+  windowPeriod: string | null;
   volume: string | null;
   estimatedPallets: number | null;
   volumePercentage: string | null;
@@ -2454,6 +2455,7 @@ export default function ContainerDashboard() {
                                 <div className="warehouseDetailList">
                                   <div className="warehouseDetailListHeader">
                                     <span>送仓地点</span>
+                                    <span>窗口期</span>
                                     <span>实际板数</span>
                                     <span>预约</span>
                                   </div>
@@ -2506,6 +2508,18 @@ export default function ContainerDashboard() {
                                             <TruncatedText
                                               text={detail.warehousePoint}
                                               className="warehousePointText"
+                                            />
+                                          </div>
+                                          <div className="warehouseWindowCell">
+                                            <TruncatedText
+                                              text={valueOrDash(
+                                                detail.windowPeriod,
+                                              )}
+                                              className={
+                                                detail.windowPeriod
+                                                  ? "warehouseWindowText"
+                                                  : "warehouseWindowText emptyText"
+                                              }
                                             />
                                           </div>
                                           <div className="warehousePalletCell">
@@ -4353,6 +4367,8 @@ function createMockWarehouseDetail(
     sourceOrderDetailId,
     deliveryNature: "AMZ",
     warehousePoint,
+    windowPeriod:
+      estimatedPallets % 2 === 0 ? "Mon-Fri 08:00-16:00" : "预约后 48h 内",
     volume: (estimatedPallets * 1.33).toFixed(2),
     estimatedPallets,
     volumePercentage: "25",
