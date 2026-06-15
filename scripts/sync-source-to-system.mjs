@@ -613,6 +613,7 @@ async function ensureSystemSchema(client) {
       source_customer_id text primary key,
       code text unique,
       name text not null,
+      balance_due_usd numeric(12, 2) not null default 0,
       source_active boolean not null default true,
       synced_at timestamptz not null default now(),
       updated_at timestamptz not null default now()
@@ -785,6 +786,11 @@ async function ensureSystemSchema(client) {
       );
     create index if not exists portal_container_bills_uploaded_idx
       on public.portal_container_bills(uploaded_at);
+  `);
+
+  await client.query(`
+    alter table public.portal_customers
+      add column if not exists balance_due_usd numeric(12, 2) not null default 0;
   `);
 
   await client.query(`

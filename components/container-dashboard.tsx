@@ -54,6 +54,11 @@ type CustomerOption = {
   role: "customer" | "admin";
 };
 
+type CustomerBalance = {
+  balanceDueUsd: string;
+  updatedAt: string | null;
+};
+
 type ContainerRecord = {
   sourceOrderId: string;
   containerNumber: string;
@@ -161,6 +166,11 @@ const MAX_INLINE_LOCATIONS = 3;
 
 export default function ContainerDashboard() {
   const [customer, setCustomer] = useState<CustomerOption | null>(null);
+  const [customerBalance, setCustomerBalance] =
+    useState<CustomerBalance | null>(null);
+  const [balanceDraft, setBalanceDraft] = useState("");
+  const [balanceState, setBalanceState] = useState<LoadState>("idle");
+  const [balanceMessage, setBalanceMessage] = useState("");
   const [containers, setContainers] = useState<TableContainerRecord[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [allContainers, setAllContainers] = useState(0);
@@ -337,6 +347,68 @@ export default function ContainerDashboard() {
   }, [mockLongTable]);
 
   useEffect(() => {
+    let ignore = false;
+
+    if (!customer) {
+      setCustomerBalance(null);
+      setBalanceDraft("");
+      setBalanceMessage("");
+      setBalanceState("idle");
+      return;
+    }
+
+    if (mockLongTable) {
+      const mockBalance = {
+        balanceDueUsd: "1234.56",
+        updatedAt: null,
+      };
+      setCustomerBalance(mockBalance);
+      setBalanceDraft(mockBalance.balanceDueUsd);
+      setBalanceMessage("");
+      setBalanceState("idle");
+      return;
+    }
+
+    async function loadCustomerBalance() {
+      setBalanceState("loading");
+      setBalanceMessage("");
+
+      const response = await fetch("/api/customers/balance");
+      const payload = (await response.json()) as {
+        balance?: CustomerBalance;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.balance) {
+        throw new Error(payload.error ?? "客户欠款读取失败");
+      }
+
+      if (!ignore) {
+        setCustomerBalance(payload.balance);
+        setBalanceDraft(payload.balance.balanceDueUsd);
+        setBalanceState("idle");
+      }
+    }
+
+    loadCustomerBalance().catch((balanceError) => {
+      if (!ignore) {
+        setCustomerBalance(null);
+        setBalanceDraft("");
+        setBalanceState("error");
+        setBalanceMessage(
+          balanceError instanceof Error
+            ? balanceError.message
+            : "客户欠款读取失败",
+        );
+      }
+    });
+
+    return () => {
+      ignore = true;
+    };
+  }, [customer, mockLongTable, refreshTick]);
+
+  useEffect(() => {
     const handle = window.setTimeout(() => setSearch(searchInput.trim()), 250);
     return () => window.clearTimeout(handle);
   }, [searchInput]);
@@ -502,6 +574,61 @@ export default function ContainerDashboard() {
   function refreshContainers() {
     setPage(1);
     setRefreshTick((value) => value + 1);
+  }
+
+  async function handleSaveBalance(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!isAdmin) return;
+
+    const normalizedBalance = normalizeBalanceDraft(balanceDraft);
+    if (!normalizedBalance) {
+      setBalanceState("error");
+      setBalanceMessage("请输入有效的美金金额");
+      return;
+    }
+
+    setBalanceState("loading");
+    setBalanceMessage("");
+
+    if (mockLongTable) {
+      const mockBalance = {
+        balanceDueUsd: normalizedBalance,
+        updatedAt: new Date().toISOString(),
+      };
+      setCustomerBalance(mockBalance);
+      setBalanceDraft(mockBalance.balanceDueUsd);
+      setBalanceState("idle");
+      setBalanceMessage("已保存");
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/customers/balance", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ balanceDueUsd: normalizedBalance }),
+      });
+      const payload = (await response.json()) as {
+        balance?: CustomerBalance;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.balance) {
+        throw new Error(payload.error ?? "客户欠款保存失败");
+      }
+
+      setCustomerBalance(payload.balance);
+      setBalanceDraft(payload.balance.balanceDueUsd);
+      setBalanceState("idle");
+      setBalanceMessage("已保存");
+    } catch (balanceError) {
+      setBalanceState("error");
+      setBalanceMessage(
+        balanceError instanceof Error
+          ? balanceError.message
+          : "客户欠款保存失败",
+      );
+    }
   }
 
   function markDateCellSaving(key: string) {
@@ -2173,6 +2300,51 @@ export default function ContainerDashboard() {
         </div>
       </section>
 
+      <section className="balancePanel" aria-label="客户欠款">
+        <div className="balanceSummary">
+          <span className="balanceLabel">客户欠款</span>
+          <strong>
+            {balanceState === "loading" && !customerBalance
+              ? "读取中..."
+              : formatUsd(customerBalance?.balanceDueUsd)}
+          </strong>
+          <span className="balanceMeta">
+            {isAdmin ? "客服编辑，客户同步可见" : "由 G&G Transport 更新"}
+          </span>
+        </div>
+        {isAdmin ? (
+          <form className="balanceForm" onSubmit={handleSaveBalance}>
+            <label className="balanceInput">
+              <span aria-hidden="true">$</span>
+              <input
+                value={balanceDraft}
+                onChange={(event) => setBalanceDraft(event.target.value)}
+                inputMode="decimal"
+                aria-label="客户欠款金额"
+                placeholder="0.00"
+              />
+            </label>
+            <button
+              className="balanceSaveButton"
+              type="submit"
+              disabled={balanceState === "loading"}
+            >
+              {balanceState === "loading" ? "保存中" : "保存"}
+            </button>
+          </form>
+        ) : null}
+        {balanceMessage ? (
+          <p
+            className={`balanceMessage ${
+              balanceState === "error" ? "isError" : ""
+            }`}
+            role={balanceState === "error" ? "alert" : "status"}
+          >
+            {balanceMessage}
+          </p>
+        ) : null}
+      </section>
+
       {!isAdmin && (showPasswordForm || passwordMessage) ? (
         <section className="passwordPanel">
           <form className="passwordForm" onSubmit={handleChangePassword}>
@@ -3639,6 +3811,26 @@ function valueOrDash(value: string | null | undefined) {
 
 function numberOrDash(value: number | null | undefined) {
   return value === null || value === undefined ? "—" : String(value);
+}
+
+function normalizeBalanceDraft(value: string) {
+  const rawValue = value.trim().replace(/[$,\s]/g, "");
+  if (!/^\d+(\.\d{0,2})?$/.test(rawValue)) return null;
+
+  const amount = Number(rawValue);
+  if (!Number.isFinite(amount) || amount < 0 || amount > 999999999.99) {
+    return null;
+  }
+
+  return amount.toFixed(2);
+}
+
+function formatUsd(value: string | null | undefined) {
+  const amount = Number(value ?? 0);
+  return new Intl.NumberFormat("en-US", {
+    currency: "USD",
+    style: "currency",
+  }).format(Number.isFinite(amount) ? amount : 0);
 }
 
 function formatPercentValue(value: string | null | undefined) {
