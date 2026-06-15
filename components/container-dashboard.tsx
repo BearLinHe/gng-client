@@ -556,6 +556,9 @@ export default function ContainerDashboard() {
   const pageStart = totalCount === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
   const pageEnd = Math.min(page * PAGE_SIZE, totalCount);
   const isAdmin = customer?.role === "admin";
+  const balanceAmountClass = `balanceAmount ${getBalanceTone(
+    customerBalance?.balanceDueUsd,
+  )}`;
   const hasActiveFilters =
     Boolean(searchInput.trim() || search || selectedOperationMode || dateFrom || dateTo) ||
     pickupStatus !== "all";
@@ -2303,14 +2306,11 @@ export default function ContainerDashboard() {
       <section className="balancePanel" aria-label="客户欠款">
         <div className="balanceSummary">
           <span className="balanceLabel">客户欠款</span>
-          <strong>
+          <strong className={balanceAmountClass}>
             {balanceState === "loading" && !customerBalance
               ? "读取中..."
               : formatUsd(customerBalance?.balanceDueUsd)}
           </strong>
-          <span className="balanceMeta">
-            {isAdmin ? "客服编辑，客户同步可见" : "由 G&G Transport 更新"}
-          </span>
         </div>
         {isAdmin ? (
           <form className="balanceForm" onSubmit={handleSaveBalance}>
@@ -3831,6 +3831,11 @@ function formatUsd(value: string | null | undefined) {
     currency: "USD",
     style: "currency",
   }).format(Number.isFinite(amount) ? amount : 0);
+}
+
+function getBalanceTone(value: string | null | undefined) {
+  const amount = Number(value ?? 0);
+  return Number.isFinite(amount) && amount > 50000 ? "isDanger" : "isWarning";
 }
 
 function formatPercentValue(value: string | null | undefined) {

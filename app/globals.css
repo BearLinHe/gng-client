@@ -195,17 +195,22 @@ h2 {
   white-space: nowrap;
 }
 
-.balanceSummary strong {
-  color: var(--accent-strong);
+.balanceAmount {
   font-size: 22px;
   line-height: 1;
+  padding: 3px 8px;
+  border-radius: 999px;
   white-space: nowrap;
 }
 
-.balanceMeta {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
+.balanceAmount.isWarning {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.balanceAmount.isDanger {
+  background: #fee2e2;
+  color: #b42318;
 }
 
 .balanceForm {
