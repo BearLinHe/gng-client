@@ -5,11 +5,7 @@ import { syncSourceToSystem } from "@/lib/source-sync.mjs";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 300;
-
-export async function GET(request: NextRequest) {
-  return runSync(request);
-}
+export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
   return runSync(request);
@@ -74,7 +70,7 @@ async function runSync(request: NextRequest) {
     return NextResponse.json(
       {
         status: "error",
-        error: "自动同步失败",
+        error: "同步失败",
         message: error instanceof Error ? error.message : "Unknown error",
         startedAt,
         finishedAt: new Date().toISOString(),
@@ -85,11 +81,7 @@ async function runSync(request: NextRequest) {
 }
 
 function validateSyncRequest(request: NextRequest) {
-  const syncSecret = process.env.SYNC_SECRET ?? process.env.CRON_SECRET;
-  const userAgent = request.headers.get("user-agent") ?? "";
-  const isVercelCron = userAgent.includes("vercel-cron/1.0");
-
-  if (isVercelCron) return null;
+  const syncSecret = process.env.SYNC_SECRET;
 
   const customer = readCustomerSession(request);
   if (customer?.role === "admin") return null;
@@ -111,7 +103,5 @@ function validateSyncRequest(request: NextRequest) {
 }
 
 function getSyncTrigger(request: NextRequest) {
-  const userAgent = request.headers.get("user-agent") ?? "";
-  if (userAgent.includes("vercel-cron/1.0")) return "vercel-cron";
-  return request.method === "POST" ? "manual-post" : "manual-get";
+  return request.method === "POST" ? "manual-post" : "manual-request";
 }
