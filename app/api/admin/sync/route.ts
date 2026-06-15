@@ -20,19 +20,31 @@ async function runSync(request: NextRequest) {
 
   const logs: string[] = [];
   const startedAt = new Date().toISOString();
+  const startedAtMs = Date.now();
+
+  console.info(
+    `[source-sync] started at=${startedAt} trigger=${getSyncTrigger(request)}`,
+  );
 
   try {
     const summary = await syncSourceToSystem({
       logger: (message) => {
         logs.push(message);
         if (logs.length > 250) logs.shift();
+        console.info(`[source-sync] ${message}`);
       },
     });
+    const finishedAt = new Date().toISOString();
+    const durationMs = Date.now() - startedAtMs;
+
+    console.info(
+      `[source-sync] success finishedAt=${finishedAt} durationMs=${durationMs} customers=${summary.customers} containers=${summary.containers} appointments=${summary.appointments} warehouseDetails=${summary.warehouseDetails} warehouseAppointments=${summary.warehouseAppointments}`,
+    );
 
     return NextResponse.json({
       ...summary,
       startedAt,
-      finishedAt: new Date().toISOString(),
+      finishedAt,
       logs,
     });
   } catch (error) {
@@ -42,6 +54,7 @@ async function runSync(request: NextRequest) {
         : undefined;
 
     if (errorCode === "SYNC_ALREADY_RUNNING") {
+      console.warn("[source-sync] skipped reason=already_running");
       return NextResponse.json(
         {
           status: "skipped",
@@ -53,7 +66,10 @@ async function runSync(request: NextRequest) {
       );
     }
 
-    console.error(error);
+    console.error(
+      `[source-sync] failed durationMs=${Date.now() - startedAtMs}`,
+      error,
+    );
     return NextResponse.json(
       {
         status: "error",
@@ -91,4 +107,10 @@ function validateSyncRequest(request: NextRequest) {
   if (isAuthorized) return null;
 
   return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+}
+
+function getSyncTrigger(request: NextRequest) {
+  const userAgent = request.headers.get("user-agent") ?? "";
+  if (userAgent.includes("vercel-cron/1.0")) return "vercel-cron";
+  return request.method === "POST" ? "manual-post" : "manual-get";
 }
