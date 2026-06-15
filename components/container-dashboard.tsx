@@ -429,7 +429,7 @@ export default function ContainerDashboard() {
 
     const intervalId = window.setInterval(() => {
       setSyncStatusTick((value) => value + 1);
-    }, 60000);
+    }, 300000);
 
     return () => window.clearInterval(intervalId);
   }, [customer, mockLongTable]);
@@ -2438,7 +2438,7 @@ export default function ContainerDashboard() {
                 {syncStatusMessage
                   ? syncStatusMessage
                   : syncStatus
-                  ? `${formatSyncTime(syncStatus.finishedAt ?? syncStatus.startedAt)} · 柜号 ${syncStatus.containerCount}`
+                  ? `${getSyncStatusPrefix(syncStatus)} ${formatSyncTime(syncStatus.finishedAt ?? syncStatus.startedAt)}`
                     : "暂无同步记录"}
               </small>
             </div>
@@ -4028,6 +4028,13 @@ function getSyncStatusLabel(syncStatus: SyncRunStatus | null) {
   if (syncStatus.status === "error") return "失败";
   if (syncStatus.status === "skipped") return "跳过";
   return syncStatus.status;
+}
+
+function getSyncStatusPrefix(syncStatus: SyncRunStatus) {
+  if (syncStatus.status === "success") return "同步成功";
+  if (syncStatus.status === "error") return "同步失败";
+  if (syncStatus.status === "skipped") return "同步跳过";
+  return "同步状态";
 }
 
 function getSyncStatusTone(
