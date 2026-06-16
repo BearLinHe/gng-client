@@ -143,6 +143,7 @@ type WarehouseAppointment = {
   estimatedPallets: number | null;
   rejectedPallets: number | null;
   effectivePallets: number | null;
+  isCustomerVisible: boolean;
   podDocument: AppointmentDocumentMeta;
   bolDocument: AppointmentDocumentMeta;
 };
@@ -255,6 +256,10 @@ export default function ContainerDashboard() {
   const [appointmentDocumentErrors, setAppointmentDocumentErrors] = useState<
     Record<string, string>
   >({});
+  const [savingAppointmentVisibility, setSavingAppointmentVisibility] =
+    useState<Set<string>>(() => new Set());
+  const [appointmentVisibilityErrors, setAppointmentVisibilityErrors] =
+    useState<Record<string, string>>({});
   const [savingContainerBills, setSavingContainerBills] = useState<Set<string>>(
     () => new Set(),
   );
@@ -278,6 +283,7 @@ export default function ContainerDashboard() {
   const savingAppointmentKeysRef = useRef(new Set<string>());
   const savingAppointmentTimeoutsRef = useRef(new Map<string, number>());
   const savingAppointmentDocumentKeysRef = useRef(new Set<string>());
+  const savingAppointmentVisibilityKeysRef = useRef(new Set<string>());
   const savingContainerBillKeysRef = useRef(new Set<string>());
   const savingWarehouseDetailKeysRef = useRef(new Set<string>());
   const savingWarehouseDetailTimeoutsRef = useRef(new Map<string, number>());
@@ -396,7 +402,7 @@ export default function ContainerDashboard() {
       };
 
       if (!response.ok || !payload.balance) {
-        throw new Error(payload.error ?? "客户欠款读取失败");
+        throw new Error(payload.error ?? "未结账款读取失败");
       }
 
       if (!ignore) {
@@ -414,7 +420,7 @@ export default function ContainerDashboard() {
         setBalanceMessage(
           balanceError instanceof Error
             ? balanceError.message
-            : "客户欠款读取失败",
+            : "未结账款读取失败",
         );
       }
     });
@@ -758,7 +764,7 @@ export default function ContainerDashboard() {
       };
 
       if (!response.ok || !payload.balance) {
-        throw new Error(payload.error ?? "客户欠款保存失败");
+        throw new Error(payload.error ?? "未结账款保存失败");
       }
 
       setCustomerBalance(payload.balance);
@@ -770,7 +776,7 @@ export default function ContainerDashboard() {
       setBalanceMessage(
         balanceError instanceof Error
           ? balanceError.message
-          : "客户欠款保存失败",
+          : "未结账款保存失败",
       );
     }
   }
@@ -853,6 +859,25 @@ export default function ContainerDashboard() {
   function clearAppointmentDocumentSaving(key: string) {
     savingAppointmentDocumentKeysRef.current.delete(key);
     setSavingAppointmentDocuments((current) => {
+      if (!current.has(key)) return current;
+      const next = new Set(current);
+      next.delete(key);
+      return next;
+    });
+  }
+
+  function markAppointmentVisibilitySaving(key: string) {
+    savingAppointmentVisibilityKeysRef.current.add(key);
+    setSavingAppointmentVisibility((current) => {
+      const next = new Set(current);
+      next.add(key);
+      return next;
+    });
+  }
+
+  function clearAppointmentVisibilitySaving(key: string) {
+    savingAppointmentVisibilityKeysRef.current.delete(key);
+    setSavingAppointmentVisibility((current) => {
       if (!current.has(key)) return current;
       const next = new Set(current);
       next.delete(key);
@@ -1411,6 +1436,107 @@ export default function ContainerDashboard() {
                     }
                   : detail,
               ),
+            }
+          : row,
+      ),
+    );
+  }
+
+  async function commitAppointmentVisibility(
+    container: TableContainerRecord,
+    warehouseDetail: WarehouseDetail,
+    appointment: WarehouseAppointment,
+  ) {
+    if (!isAdmin || !canSelectAppointmentVisibility(appointment)) return;
+
+    const sourceOrderDetailId =
+      appointment.sourceOrderDetailId || warehouseDetail.sourceOrderDetailId;
+    const key = getAppointmentVisibilityKey(
+      container.rowId,
+      sourceOrderDetailId,
+    );
+
+    if (savingAppointmentVisibilityKeysRef.current.has(key)) return;
+    if (appointment.isCustomerVisible) return;
+
+    markAppointmentVisibilitySaving(key);
+    setAppointmentVisibilityErrors((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+
+    if (mockLongTable) {
+      applyUpdatedAppointmentVisibility(
+        container,
+        sourceOrderDetailId,
+        appointment.sourceAppointmentLineId,
+      );
+      clearAppointmentVisibilitySaving(key);
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/containers", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind: "warehouseAppointmentVisibility",
+          sourceOrderId: container.sourceOrderId,
+          sourceOrderDetailId,
+          sourceAppointmentLineId: appointment.sourceAppointmentLineId,
+        }),
+      });
+      const payload = (await response.json()) as {
+        warehouseAppointmentVisibility?: {
+          sourceOrderDetailId: string;
+          sourceAppointmentLineId: string | null;
+        };
+        error?: string;
+      };
+
+      if (!response.ok || !payload.warehouseAppointmentVisibility) {
+        throw new Error(payload.error ?? "保存失败");
+      }
+
+      applyUpdatedAppointmentVisibility(
+        container,
+        payload.warehouseAppointmentVisibility.sourceOrderDetailId,
+        payload.warehouseAppointmentVisibility.sourceAppointmentLineId,
+      );
+    } catch (saveError) {
+      setAppointmentVisibilityErrors((current) => ({
+        ...current,
+        [key]: saveError instanceof Error ? saveError.message : "保存失败",
+      }));
+    } finally {
+      clearAppointmentVisibilitySaving(key);
+    }
+  }
+
+  function applyUpdatedAppointmentVisibility(
+    original: TableContainerRecord,
+    sourceOrderDetailId: string,
+    sourceAppointmentLineId: string | null,
+  ) {
+    setContainers((current) =>
+      current.map((row) =>
+        row.rowId === original.rowId
+          ? {
+              ...row,
+              warehouseDetails: row.warehouseDetails.map((detail) => ({
+                ...detail,
+                appointments: detail.appointments.map((appointment) =>
+                  appointment.sourceOrderDetailId === sourceOrderDetailId
+                    ? {
+                        ...appointment,
+                        isCustomerVisible:
+                          appointment.sourceAppointmentLineId ===
+                          sourceAppointmentLineId,
+                      }
+                    : appointment,
+                ),
+              })),
             }
           : row,
       ),
@@ -2487,9 +2613,9 @@ export default function ContainerDashboard() {
         </div>
       </section>
 
-      <section className="balancePanel" aria-label="客户欠款">
+      <section className="balancePanel" aria-label="未结账款">
         <div className="balanceSummary">
-          <span className="balanceLabel">客户欠款</span>
+          <span className="balanceLabel">未结账款</span>
           <strong className={balanceAmountClass}>
             {balanceState === "loading" && !customerBalance
               ? "读取中..."
@@ -2504,7 +2630,7 @@ export default function ContainerDashboard() {
                 value={balanceDraft}
                 onChange={(event) => setBalanceDraft(event.target.value)}
                 inputMode="decimal"
-                aria-label="客户欠款金额"
+                aria-label="未结账款金额"
                 placeholder="0.00"
               />
             </label>
@@ -2938,8 +3064,18 @@ export default function ContainerDashboard() {
                                               送仓预约
                                             </div>
                                             {detail.appointments.length ? (
-                                              <div className="warehouseAppointmentGrid">
+                                              <div
+                                                className={[
+                                                  "warehouseAppointmentGrid",
+                                                  isAdmin ? "isAdmin" : "",
+                                                ]
+                                                  .filter(Boolean)
+                                                  .join(" ")}
+                                              >
                                                 <div className="warehouseAppointmentHeader">
+                                                  {isAdmin ? (
+                                                    <span>客户可见</span>
+                                                  ) : null}
                                                   <span>预约号码</span>
                                                   <span>送仓日</span>
                                                   <span>有效板数</span>
@@ -2950,11 +3086,93 @@ export default function ContainerDashboard() {
                                                   (
                                                     appointment,
                                                     appointmentIndex,
-                                                  ) => (
+                                                  ) => {
+                                                    const sourceOrderDetailId =
+                                                      getAppointmentSourceDetailId(
+                                                        appointment,
+                                                        detail,
+                                                      );
+                                                    const visibilityKey =
+                                                      getAppointmentVisibilityKey(
+                                                        container.rowId,
+                                                        sourceOrderDetailId,
+                                                      );
+                                                    const canSelectVisibility =
+                                                      canSelectAppointmentVisibility(
+                                                        appointment,
+                                                      );
+                                                    const isSavingVisibility =
+                                                      savingAppointmentVisibility.has(
+                                                        visibilityKey,
+                                                      );
+                                                    const visibilityError =
+                                                      appointmentVisibilityErrors[
+                                                        visibilityKey
+                                                      ];
+
+                                                    return (
                                                     <div
                                                       className="warehouseAppointmentItem"
                                                       key={`${appointment.sourceAppointmentLineId}-${appointmentIndex}`}
                                                     >
+                                                      {isAdmin ? (
+                                                        <div className="appointmentVisibilityCell">
+                                                          <button
+                                                            type="button"
+                                                            className={[
+                                                              "visibleAppointmentButton",
+                                                              appointment.isCustomerVisible
+                                                                ? "selected"
+                                                                : "",
+                                                            ]
+                                                              .filter(Boolean)
+                                                              .join(" ")}
+                                                            disabled={
+                                                              !canSelectVisibility ||
+                                                              isSavingVisibility
+                                                            }
+                                                            title={
+                                                              canSelectVisibility
+                                                                ? appointment.isCustomerVisible
+                                                                  ? "客户只读页面正在显示这条预约"
+                                                                  : "设置为客户只读页面显示的预约"
+                                                                : "旧预约数据暂不支持指定客户可见"
+                                                            }
+                                                            onClick={() =>
+                                                              commitAppointmentVisibility(
+                                                                container,
+                                                                detail,
+                                                                appointment,
+                                                              )
+                                                            }
+                                                          >
+                                                            {isSavingVisibility ? (
+                                                              <LoaderCircle
+                                                                size={13}
+                                                                aria-hidden="true"
+                                                              />
+                                                            ) : (
+                                                              <Eye
+                                                                size={13}
+                                                                aria-hidden="true"
+                                                              />
+                                                            )}
+                                                            <span>
+                                                              {appointment.isCustomerVisible
+                                                                ? "客户可见"
+                                                                : "设为可见"}
+                                                            </span>
+                                                          </button>
+                                                          {visibilityError ? (
+                                                            <span
+                                                              className="appointmentVisibilityError"
+                                                              role="alert"
+                                                            >
+                                                              {visibilityError}
+                                                            </span>
+                                                          ) : null}
+                                                        </div>
+                                                      ) : null}
                                                       <div>
                                                         <EditableAppointmentCell
                                                           appointment={
@@ -3274,7 +3492,8 @@ export default function ContainerDashboard() {
                                                         />
                                                       </div>
                                                     </div>
-                                                  ),
+                                                    );
+                                                  },
                                                 )}
                                               </div>
                                             ) : (
@@ -4196,6 +4415,10 @@ function getAppointmentDocumentKey(
   return `${rowId}:${sourceOrderDetailId}:${sourceAppointmentLineId}:${documentType}`;
 }
 
+function getAppointmentVisibilityKey(rowId: string, sourceOrderDetailId: string) {
+  return `${rowId}:${sourceOrderDetailId}:customer-visible`;
+}
+
 function getContainerBillKey(rowId: string) {
   return `${rowId}:bill`;
 }
@@ -4425,9 +4648,19 @@ function legacyAppointmentToWarehouseAppointment(
     estimatedPallets: appointment.palletCount,
     rejectedPallets: 0,
     effectivePallets: appointment.palletCount,
+    isCustomerVisible: false,
     podDocument: emptyAppointmentDocument(),
     bolDocument: emptyAppointmentDocument(),
   };
+}
+
+function canSelectAppointmentVisibility(appointment: WarehouseAppointment) {
+  return (
+    Boolean(appointment.sourceOrderDetailId) &&
+    Boolean(appointment.sourceAppointmentLineId) &&
+    !appointment.sourceOrderDetailId.startsWith("legacy:") &&
+    !appointment.sourceAppointmentLineId.startsWith("legacy:")
+  );
 }
 
 function mergeAppointmentUpdate(
@@ -4801,7 +5034,10 @@ function createMockWarehouseDetail(
   sourceOrderDetailId: string,
   warehousePoint: string,
   estimatedPallets: number,
-  appointments: WarehouseAppointment[],
+  appointments: Array<
+    Omit<WarehouseAppointment, "isCustomerVisible"> &
+      Partial<Pick<WarehouseAppointment, "isCustomerVisible">>
+  >,
 ): WarehouseDetail {
   return {
     sourceOrderDetailId,
@@ -4819,6 +5055,9 @@ function createMockWarehouseDetail(
     fba: "-",
     notes: estimatedPallets % 3 === 0 ? "到港后尽快安排派送" : "-",
     po: null,
-    appointments,
+    appointments: appointments.map((appointment) => ({
+      ...appointment,
+      isCustomerVisible: appointment.isCustomerVisible ?? false,
+    })),
   };
 }

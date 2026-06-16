@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ balance });
   } catch (error) {
     console.error(error);
-    return NextResponse.json({ error: "读取客户欠款失败" }, { status: 500 });
+    return NextResponse.json({ error: "读取未结账款失败" }, { status: 500 });
   }
 }
 
@@ -67,7 +67,7 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ balance });
   } catch (error) {
     console.error(error);
-    return NextResponse.json({ error: "保存客户欠款失败" }, { status: 500 });
+    return NextResponse.json({ error: "保存未结账款失败" }, { status: 500 });
   }
 }
 

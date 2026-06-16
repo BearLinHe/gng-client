@@ -66,6 +66,7 @@ export type WarehouseAppointment = {
   estimatedPallets: number | null;
   rejectedPallets: number | null;
   effectivePallets: number | null;
+  isCustomerVisible: boolean;
   podDocument: AppointmentDocumentMeta;
   bolDocument: AppointmentDocumentMeta;
 };
@@ -163,6 +164,7 @@ type WarehouseAppointmentRow = {
   estimatedPallets: string | number | null;
   rejectedPallets: string | number | null;
   effectivePallets: string | number | null;
+  isCustomerVisible?: boolean | null;
 };
 
 type AppointmentDocumentRow = {
@@ -494,6 +496,7 @@ export async function getCustomers(): Promise<CustomerOption[]> {
 
 export async function getContainers({
   customerId,
+  showAllWarehouseAppointments = false,
   operationMode,
   search,
   dateField,
@@ -504,6 +507,7 @@ export async function getContainers({
   pageSize = 100,
 }: {
   customerId?: string | null;
+  showAllWarehouseAppointments?: boolean;
   operationMode?: string | null;
   search?: string | null;
   dateField?: DateFilterField | null;
@@ -518,6 +522,46 @@ export async function getContainers({
   const safePage = Math.max(1, Math.floor(page));
   const safePageSize = Math.min(200, Math.max(25, Math.floor(pageSize)));
   const offset = (safePage - 1) * safePageSize;
+  const appointmentVisibilityFilter = showAllWarehouseAppointments
+    ? ""
+    : `
+              and (
+                pwd.customer_visible_appointment_line_id is null
+                or pwa.source_appointment_line_id = pwd.customer_visible_appointment_line_id
+                or not exists (
+                  select 1
+                  from public.portal_warehouse_appointments pwa_selected
+                  where pwa_selected.source_order_id = pwd.source_order_id
+                    and pwa_selected.source_order_detail_id = pwd.source_order_detail_id
+                    and pwa_selected.source_appointment_line_id = pwd.customer_visible_appointment_line_id
+                    and pwa_selected.source_active = true
+                )
+              )
+            `;
+  const appointmentSearchVisibilityJoin = showAllWarehouseAppointments
+    ? ""
+    : `
+        join public.portal_warehouse_details pwd_search_visibility
+          on pwd_search_visibility.source_order_id = pwa_search.source_order_id
+         and pwd_search_visibility.source_order_detail_id = pwa_search.source_order_detail_id
+         and pwd_search_visibility.source_active = true
+      `;
+  const appointmentSearchVisibilityFilter = showAllWarehouseAppointments
+    ? ""
+    : `
+          and (
+            pwd_search_visibility.customer_visible_appointment_line_id is null
+            or pwa_search.source_appointment_line_id = pwd_search_visibility.customer_visible_appointment_line_id
+            or not exists (
+              select 1
+              from public.portal_warehouse_appointments pwa_search_selected
+              where pwa_search_selected.source_order_id = pwd_search_visibility.source_order_id
+                and pwa_search_selected.source_order_detail_id = pwd_search_visibility.source_order_detail_id
+                and pwa_search_selected.source_appointment_line_id = pwd_search_visibility.customer_visible_appointment_line_id
+                and pwa_search_selected.source_active = true
+            )
+          )
+        `;
 
   if (customerId) {
     params.push(customerId);
@@ -556,8 +600,10 @@ export async function getContainers({
       or exists (
         select 1
         from public.portal_warehouse_appointments pwa_search
+        ${appointmentSearchVisibilityJoin}
         where pwa_search.source_order_id = pc.source_order_id
           and pwa_search.source_active = true
+          ${appointmentSearchVisibilityFilter}
           and coalesce(pwa_search.manual_appointment_number, pwa_search.source_appointment_number, '') ilike $${params.length}
       )
     )`);
@@ -697,7 +743,9 @@ export async function getContainers({
                 'deliveryDate', ${appWarehouseAppointmentColumns.deliveryDate},
                 'estimatedPallets', pwa.source_estimated_pallets,
                 'rejectedPallets', pwa.source_rejected_pallets,
-                'effectivePallets', ${appWarehouseAppointmentColumns.effectivePallets}
+                'effectivePallets', ${appWarehouseAppointmentColumns.effectivePallets},
+                'isCustomerVisible', pwd.customer_visible_appointment_line_id is not null
+                  and pwa.source_appointment_line_id = pwd.customer_visible_appointment_line_id
               )
               order by
                 ${appWarehouseAppointmentColumns.deliveryDate} asc nulls last,
@@ -708,6 +756,7 @@ export async function getContainers({
             where pwa.source_order_id = pc.source_order_id
               and pwa.source_order_detail_id = pwd.source_order_detail_id
               and pwa.source_active = true
+              ${appointmentVisibilityFilter}
           ) warehouse_appointments on true
           where pwd.source_order_id = pc.source_order_id
             and pwd.source_active = true
@@ -755,7 +804,9 @@ export async function getContainers({
     );
 
     return {
-      containers: rows(result).map(toContainerRecord),
+      containers: rows(result).map((row) =>
+        toContainerRecord(row, { showAllWarehouseAppointments }),
+      ),
       total: Number(rows(dataCountResult)[0]?.total ?? 0),
       allContainers: Number(rows(countResult)[0]?.total ?? 0),
       involvedCustomers: Number(rows(countResult)[0]?.involved_customers ?? 0),
@@ -962,7 +1013,14 @@ export async function updateWarehouseAppointmentDetail({
           ${appWarehouseAppointmentColumns.deliveryDate} as "deliveryDate",
           pwa.source_estimated_pallets as "estimatedPallets",
           pwa.source_rejected_pallets as "rejectedPallets",
-          ${appWarehouseAppointmentColumns.effectivePallets} as "effectivePallets"
+          ${appWarehouseAppointmentColumns.effectivePallets} as "effectivePallets",
+          exists (
+            select 1
+            from public.portal_warehouse_details pwd
+            where pwd.source_order_id = pwa.source_order_id
+              and pwd.source_order_detail_id = pwa.source_order_detail_id
+              and pwd.customer_visible_appointment_line_id = pwa.source_appointment_line_id
+          ) as "isCustomerVisible"
       `,
       [
         sourceOrderId,
@@ -977,6 +1035,66 @@ export async function updateWarehouseAppointmentDetail({
     if (!updated) return null;
 
     return toWarehouseAppointment(updated);
+  });
+}
+
+export async function updateWarehouseAppointmentVisibility({
+  customerId,
+  sourceOrderId,
+  sourceOrderDetailId,
+  sourceAppointmentLineId,
+}: {
+  customerId: string;
+  sourceOrderId: string;
+  sourceOrderDetailId: string;
+  sourceAppointmentLineId: string | null;
+}): Promise<{
+  sourceOrderDetailId: string;
+  sourceAppointmentLineId: string | null;
+} | null> {
+  const normalizedAppointmentLineId =
+    sourceAppointmentLineId?.trim() || null;
+
+  return withAppTransaction(async (client) => {
+    const result = await client.query<{
+      sourceOrderDetailId: string;
+      sourceAppointmentLineId: string | null;
+    }>(
+      `
+        update public.portal_warehouse_details pwd
+        set customer_visible_appointment_line_id = $4::text,
+            updated_at = now()
+        from public.portal_containers pc
+        where pwd.source_order_id = pc.source_order_id
+          and pwd.source_order_id = $1
+          and pwd.source_order_detail_id = $2
+          and pc.source_customer_id = $3
+          and pwd.source_active = true
+          and pc.source_active = true
+          and (
+            $4::text is null
+            or exists (
+              select 1
+              from public.portal_warehouse_appointments pwa
+              where pwa.source_order_id = pwd.source_order_id
+                and pwa.source_order_detail_id = pwd.source_order_detail_id
+                and pwa.source_appointment_line_id = $4
+                and pwa.source_active = true
+            )
+          )
+        returning
+          pwd.source_order_detail_id as "sourceOrderDetailId",
+          pwd.customer_visible_appointment_line_id as "sourceAppointmentLineId"
+      `,
+      [
+        sourceOrderId,
+        sourceOrderDetailId,
+        customerId,
+        normalizedAppointmentLineId,
+      ],
+    );
+
+    return rows(result)[0] ?? null;
   });
 }
 
@@ -1435,7 +1553,7 @@ export async function getSourceContainers({
     );
 
     return {
-      containers: rows(result).map(toContainerRecord),
+      containers: rows(result).map((row) => toContainerRecord(row)),
       total: Number(rows(dataCountResult)[0]?.total ?? 0),
       allContainers: Number(rows(countResult)[0]?.total ?? 0),
       involvedCustomers: Number(rows(countResult)[0]?.involved_customers ?? 0),
@@ -1447,7 +1565,12 @@ export async function getSourceContainers({
   });
 }
 
-function toContainerRecord(row: ContainerRow): ContainerRecord {
+function toContainerRecord(
+  row: ContainerRow,
+  {
+    showAllWarehouseAppointments = false,
+  }: { showAllWarehouseAppointments?: boolean } = {},
+): ContainerRecord {
   const appointments = (row.appointments ?? []).map(toDeliveryAppointment);
   const appointmentDocuments = buildAppointmentDocumentMap(
     row.appointment_documents ?? [],
@@ -1456,6 +1579,7 @@ function toContainerRecord(row: ContainerRow): ContainerRecord {
     (row.warehouse_details ?? []).map(toWarehouseDetail),
     appointments,
     appointmentDocuments,
+    { showAllWarehouseAppointments },
   );
 
   return {
@@ -1523,6 +1647,7 @@ function toWarehouseAppointment(
     estimatedPallets: toNullableNumber(appointment.estimatedPallets),
     rejectedPallets: toNullableNumber(appointment.rejectedPallets),
     effectivePallets: toNullableNumber(appointment.effectivePallets),
+    isCustomerVisible: Boolean(appointment.isCustomerVisible),
     podDocument: emptyAppointmentDocument(),
     bolDocument: emptyAppointmentDocument(),
   };
@@ -1557,6 +1682,9 @@ function buildWarehouseDetails(
   details: WarehouseDetail[],
   appointments: DeliveryAppointment[],
   documentMap: Map<string, AppointmentDocumentMeta>,
+  {
+    showAllWarehouseAppointments = false,
+  }: { showAllWarehouseAppointments?: boolean } = {},
 ): WarehouseDetail[] {
   const appointmentById = new Map(
     appointments.map((appointment) => [
@@ -1604,12 +1732,24 @@ function buildWarehouseDetails(
     groupedDetails.set(key, mergeWarehouseDetails(existing, normalizedDetail));
   }
 
+  const selectedWarehousePoints = new Set(
+    [...groupedDetails.values()]
+      .filter((detail) =>
+        detail.appointments.some((appointment) => appointment.isCustomerVisible),
+      )
+      .map((detail) => detail.warehousePoint.toLowerCase()),
+  );
+
   for (const appointment of appointments) {
     if (existingAppointmentIds.has(appointment.sourceAppointmentId)) continue;
     if (!isMeaningfulWarehousePoint(appointment.warehousePoint)) continue;
 
     const warehousePoint = appointment.warehousePoint;
     const key = warehousePoint.toLowerCase();
+    if (!showAllWarehouseAppointments && selectedWarehousePoints.has(key)) {
+      continue;
+    }
+
     const warehouseAppointment = legacyAppointmentToWarehouseAppointment(
       appointment,
     );
@@ -1735,6 +1875,7 @@ function legacyAppointmentToWarehouseAppointment(
     estimatedPallets: appointment.palletCount,
     rejectedPallets: 0,
     effectivePallets: appointment.palletCount,
+    isCustomerVisible: false,
     podDocument: emptyAppointmentDocument(),
     bolDocument: emptyAppointmentDocument(),
   };

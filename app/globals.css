@@ -1702,6 +1702,18 @@ body.rowDragActive * {
   min-width: 720px;
 }
 
+.warehouseAppointmentGrid.isAdmin .warehouseAppointmentHeader,
+.warehouseAppointmentGrid.isAdmin .warehouseAppointmentItem {
+  grid-template-columns:
+    minmax(118px, 0.8fr)
+    minmax(170px, 1.35fr)
+    minmax(120px, 0.9fr)
+    minmax(92px, 0.65fr)
+    minmax(130px, 0.85fr)
+    minmax(130px, 0.85fr);
+  min-width: 850px;
+}
+
 .warehouseAppointmentHeader {
   min-height: 34px;
   padding: 8px 12px;
@@ -1715,6 +1727,59 @@ body.rowDragActive * {
   min-height: 42px;
   padding: 6px 12px;
   border-top: 1px solid #edf2f7;
+}
+
+.appointmentVisibilityCell {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.visibleAppointmentButton {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #d3e1f1;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #52657a;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 6px 9px;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.visibleAppointmentButton:hover:not(:disabled) {
+  border-color: #99c8f8;
+  background: #f0f7ff;
+  color: #0f66b4;
+  box-shadow: 0 1px 4px rgba(15, 102, 180, 0.12);
+}
+
+.visibleAppointmentButton.selected {
+  border-color: #9dccf8;
+  background: #e8f4ff;
+  color: #0f66b4;
+}
+
+.visibleAppointmentButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.appointmentVisibilityError {
+  color: #b42318;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .documentCell {

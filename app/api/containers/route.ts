@@ -6,6 +6,7 @@ import {
   updateContainerDate,
   updateWarehouseDetail,
   updateWarehouseAppointmentDetail,
+  updateWarehouseAppointmentVisibility,
   getContainers,
   type DateFilterField,
   type EditableAppointmentField,
@@ -36,6 +37,7 @@ export async function GET(request: NextRequest) {
   try {
     const result = await getContainers({
       customerId: customer.id,
+      showAllWarehouseAppointments: customer.role === "admin",
       operationMode,
       search,
       dateField,
@@ -97,6 +99,24 @@ export async function PATCH(request: NextRequest) {
       }
 
       return NextResponse.json({ warehouseDetail: updated });
+    }
+
+    if (payload.kind === "warehouseAppointmentVisibility") {
+      const updated = await updateWarehouseAppointmentVisibility({
+        customerId: customer.id,
+        sourceOrderId: payload.sourceOrderId,
+        sourceOrderDetailId: payload.sourceOrderDetailId,
+        sourceAppointmentLineId: payload.sourceAppointmentLineId,
+      });
+
+      if (!updated) {
+        return NextResponse.json(
+          { error: "未找到可设置的送仓预约" },
+          { status: 404 },
+        );
+      }
+
+      return NextResponse.json({ warehouseAppointmentVisibility: updated });
     }
 
     if (payload.kind === "warehouseAppointment") {
@@ -215,6 +235,12 @@ function parsePatchPayload(
       field: EditableWarehouseAppointmentField;
       value: string | null;
     }
+  | {
+      kind: "warehouseAppointmentVisibility";
+      sourceOrderId: string;
+      sourceOrderDetailId: string;
+      sourceAppointmentLineId: string | null;
+    }
   | null {
   if (!value || typeof value !== "object") return null;
 
@@ -278,6 +304,31 @@ function parsePatchPayload(
       sourceAppointmentLineId: body.sourceAppointmentLineId.trim(),
       field: body.field,
       value: parsedValue,
+    };
+  }
+
+  if (body.kind === "warehouseAppointmentVisibility") {
+    if (
+      typeof body.sourceOrderDetailId !== "string" ||
+      !body.sourceOrderDetailId.trim() ||
+      !(
+        body.sourceAppointmentLineId === null ||
+        typeof body.sourceAppointmentLineId === "string"
+      )
+    ) {
+      return null;
+    }
+
+    const sourceAppointmentLineId =
+      typeof body.sourceAppointmentLineId === "string"
+        ? body.sourceAppointmentLineId.trim()
+        : null;
+
+    return {
+      kind: "warehouseAppointmentVisibility",
+      sourceOrderId: body.sourceOrderId.trim(),
+      sourceOrderDetailId: body.sourceOrderDetailId.trim(),
+      sourceAppointmentLineId: sourceAppointmentLineId || null,
     };
   }
 
