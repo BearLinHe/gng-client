@@ -40,6 +40,7 @@ import {
   useRef,
   useState,
   type FocusEvent,
+  type CSSProperties,
   type FormEvent,
   type MouseEvent,
   type PointerEvent,
@@ -57,6 +58,14 @@ type CustomerOption = {
 type CustomerBalance = {
   balanceDueUsd: string;
   updatedAt: string | null;
+};
+
+type CustomerVisibilitySettings = {
+  showAppointmentNumber: boolean;
+  showDeliveryDate: boolean;
+  showEffectivePallets: boolean;
+  showPod: boolean;
+  showBol: boolean;
 };
 
 type SyncRunStatus = {
@@ -84,6 +93,7 @@ type ContainerRecord = {
   operationModeLabel: string;
   destination: string | null;
   warehousePoints: string | null;
+  extraChargeResponsibility: string | null;
   appointments: DeliveryAppointment[];
   warehouseDetails: WarehouseDetail[];
   billDocument: AppointmentDocumentMeta;
@@ -105,6 +115,8 @@ type EditableWarehouseAppointmentField =
   | "deliveryDate"
   | "effectivePallets";
 type EditableWarehouseDetailField = "actualPallets";
+type EditableContainerTextField = "extraChargeResponsibility";
+type EditableWarehouseDetailTextField = "customerNote";
 type AppointmentDocumentType = "pod" | "bol";
 type PickupStatus = "all" | "pending" | "picked";
 
@@ -131,6 +143,7 @@ type WarehouseDetail = {
   fba: string | null;
   notes: string | null;
   po: string | null;
+  customerNote: string | null;
   appointments: WarehouseAppointment[];
 };
 
@@ -175,11 +188,32 @@ type RowDragSession = {
 };
 const PAGE_SIZE = 100;
 const MAX_INLINE_LOCATIONS = 3;
+const defaultCustomerVisibilitySettings: CustomerVisibilitySettings = {
+  showAppointmentNumber: true,
+  showDeliveryDate: true,
+  showEffectivePallets: true,
+  showPod: true,
+  showBol: true,
+};
+const customerVisibilityOptions: Array<{
+  key: keyof CustomerVisibilitySettings;
+  label: string;
+}> = [
+  { key: "showAppointmentNumber", label: "ISA号码" },
+  { key: "showDeliveryDate", label: "送仓日" },
+  { key: "showEffectivePallets", label: "有效板数" },
+  { key: "showPod", label: "POD" },
+  { key: "showBol", label: "BOL" },
+];
 
 export default function ContainerDashboard() {
   const [customer, setCustomer] = useState<CustomerOption | null>(null);
   const [customerBalance, setCustomerBalance] =
     useState<CustomerBalance | null>(null);
+  const [customerSettings, setCustomerSettings] =
+    useState<CustomerVisibilitySettings>(defaultCustomerVisibilitySettings);
+  const [settingsState, setSettingsState] = useState<LoadState>("idle");
+  const [settingsMessage, setSettingsMessage] = useState("");
   const [balanceDraft, setBalanceDraft] = useState("");
   const [balanceState, setBalanceState] = useState<LoadState>("idle");
   const [balanceMessage, setBalanceMessage] = useState("");
@@ -260,6 +294,12 @@ export default function ContainerDashboard() {
     useState<Set<string>>(() => new Set());
   const [appointmentVisibilityErrors, setAppointmentVisibilityErrors] =
     useState<Record<string, string>>({});
+  const [savingTextCells, setSavingTextCells] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [textCellErrors, setTextCellErrors] = useState<Record<string, string>>(
+    {},
+  );
   const [savingContainerBills, setSavingContainerBills] = useState<Set<string>>(
     () => new Set(),
   );
@@ -284,6 +324,7 @@ export default function ContainerDashboard() {
   const savingAppointmentTimeoutsRef = useRef(new Map<string, number>());
   const savingAppointmentDocumentKeysRef = useRef(new Set<string>());
   const savingAppointmentVisibilityKeysRef = useRef(new Set<string>());
+  const savingTextCellKeysRef = useRef(new Set<string>());
   const savingContainerBillKeysRef = useRef(new Set<string>());
   const savingWarehouseDetailKeysRef = useRef(new Set<string>());
   const savingWarehouseDetailTimeoutsRef = useRef(new Map<string, number>());
@@ -333,6 +374,60 @@ export default function ContainerDashboard() {
     });
     setAuthChecked(true);
   }, [mockLongTable]);
+
+  useEffect(() => {
+    let ignore = false;
+
+    if (!customer) {
+      setCustomerSettings(defaultCustomerVisibilitySettings);
+      setSettingsState("idle");
+      setSettingsMessage("");
+      return;
+    }
+
+    if (mockLongTable) {
+      setCustomerSettings(defaultCustomerVisibilitySettings);
+      setSettingsState("idle");
+      setSettingsMessage("");
+      return;
+    }
+
+    async function loadCustomerSettings() {
+      setSettingsState("loading");
+      setSettingsMessage("");
+
+      const response = await fetch("/api/customers/settings");
+      const payload = (await response.json()) as {
+        settings?: CustomerVisibilitySettings;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.settings) {
+        throw new Error(payload.error ?? "客户显示设置读取失败");
+      }
+
+      if (!ignore) {
+        setCustomerSettings(payload.settings);
+        setSettingsState("idle");
+      }
+    }
+
+    loadCustomerSettings().catch((settingsError) => {
+      if (!ignore) {
+        setCustomerSettings(defaultCustomerVisibilitySettings);
+        setSettingsState("error");
+        setSettingsMessage(
+          settingsError instanceof Error
+            ? settingsError.message
+            : "客户显示设置读取失败",
+        );
+      }
+    });
+
+    return () => {
+      ignore = true;
+    };
+  }, [customer, mockLongTable, refreshTick, syncStatusTick]);
 
   useEffect(() => {
     let ignore = false;
@@ -548,6 +643,9 @@ export default function ContainerDashboard() {
       setAppointmentDocumentErrors({});
       setSavingAppointmentDocuments(new Set());
       savingAppointmentDocumentKeysRef.current.clear();
+      setTextCellErrors({});
+      setSavingTextCells(new Set());
+      savingTextCellKeysRef.current.clear();
       setContainerBillErrors({});
       setSavingContainerBills(new Set());
       savingContainerBillKeysRef.current.clear();
@@ -605,6 +703,9 @@ export default function ContainerDashboard() {
         setAppointmentDocumentErrors({});
         setSavingAppointmentDocuments(new Set());
         savingAppointmentDocumentKeysRef.current.clear();
+        setTextCellErrors({});
+        setSavingTextCells(new Set());
+        savingTextCellKeysRef.current.clear();
         setContainerBillErrors({});
         setSavingContainerBills(new Set());
         savingContainerBillKeysRef.current.clear();
@@ -658,6 +759,25 @@ export default function ContainerDashboard() {
     syncStatusState,
     syncActionState,
   )}`;
+  const appointmentColumnSettings = isAdmin
+    ? defaultCustomerVisibilitySettings
+    : customerSettings;
+  const visibleAppointmentColumnCount =
+    (isAdmin ? 1 : 0) +
+    Number(appointmentColumnSettings.showAppointmentNumber) +
+    Number(appointmentColumnSettings.showDeliveryDate) +
+    Number(appointmentColumnSettings.showEffectivePallets) +
+    Number(appointmentColumnSettings.showPod) +
+    Number(appointmentColumnSettings.showBol);
+  const appointmentGridStyle = {
+    "--appointment-grid-template": getAppointmentGridTemplate(
+      isAdmin,
+      appointmentColumnSettings,
+    ),
+    "--appointment-grid-min-width": getAppointmentGridMinWidth(
+      visibleAppointmentColumnCount,
+    ),
+  } as CSSProperties;
   const hasActiveFilters =
     Boolean(searchInput.trim() || search || selectedOperationMode || dateFrom || dateTo) ||
     pickupStatus !== "all";
@@ -781,6 +901,57 @@ export default function ContainerDashboard() {
     }
   }
 
+  async function updateCustomerSetting(
+    key: keyof CustomerVisibilitySettings,
+    checked: boolean,
+  ) {
+    if (!isAdmin) return;
+
+    const nextSettings = {
+      ...customerSettings,
+      [key]: checked,
+    };
+    const previousSettings = customerSettings;
+
+    setCustomerSettings(nextSettings);
+    setSettingsState("loading");
+    setSettingsMessage("");
+
+    if (mockLongTable) {
+      setSettingsState("idle");
+      setSettingsMessage("已保存");
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/customers/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ settings: nextSettings }),
+      });
+      const payload = (await response.json()) as {
+        settings?: CustomerVisibilitySettings;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.settings) {
+        throw new Error(payload.error ?? "客户显示设置保存失败");
+      }
+
+      setCustomerSettings(payload.settings);
+      setSettingsState("idle");
+      setSettingsMessage("已保存");
+    } catch (settingsError) {
+      setCustomerSettings(previousSettings);
+      setSettingsState("error");
+      setSettingsMessage(
+        settingsError instanceof Error
+          ? settingsError.message
+          : "客户显示设置保存失败",
+      );
+    }
+  }
+
   function markDateCellSaving(key: string) {
     savingDateKeysRef.current.add(key);
     setSavingDateCells((current) => {
@@ -878,6 +1049,25 @@ export default function ContainerDashboard() {
   function clearAppointmentVisibilitySaving(key: string) {
     savingAppointmentVisibilityKeysRef.current.delete(key);
     setSavingAppointmentVisibility((current) => {
+      if (!current.has(key)) return current;
+      const next = new Set(current);
+      next.delete(key);
+      return next;
+    });
+  }
+
+  function markTextCellSaving(key: string) {
+    savingTextCellKeysRef.current.add(key);
+    setSavingTextCells((current) => {
+      const next = new Set(current);
+      next.add(key);
+      return next;
+    });
+  }
+
+  function clearTextCellSaving(key: string) {
+    savingTextCellKeysRef.current.delete(key);
+    setSavingTextCells((current) => {
       if (!current.has(key)) return current;
       const next = new Set(current);
       next.delete(key);
@@ -1543,6 +1733,177 @@ export default function ContainerDashboard() {
     );
   }
 
+  async function commitContainerExtraCharge(
+    container: TableContainerRecord,
+    value: string,
+  ) {
+    const key = getContainerTextKey(container.rowId, "extraChargeResponsibility");
+    if (!isAdmin || savingTextCellKeysRef.current.has(key)) return;
+
+    const nextValue = normalizeTextDraft(value);
+    if (nextValue === (container.extraChargeResponsibility ?? null)) return;
+
+    markTextCellSaving(key);
+    setTextCellErrors((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+
+    if (mockLongTable) {
+      applyUpdatedContainerText(container, nextValue);
+      clearTextCellSaving(key);
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/containers", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind: "containerText",
+          sourceOrderId: container.sourceOrderId,
+          field: "extraChargeResponsibility",
+          value: nextValue,
+        }),
+      });
+      const payload = (await response.json()) as {
+        containerText?: Pick<
+          ContainerRecord,
+          "sourceOrderId" | "extraChargeResponsibility"
+        >;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.containerText) {
+        throw new Error(payload.error ?? "保存失败");
+      }
+
+      applyUpdatedContainerText(
+        container,
+        payload.containerText.extraChargeResponsibility ?? null,
+      );
+    } catch (saveError) {
+      setTextCellErrors((current) => ({
+        ...current,
+        [key]: saveError instanceof Error ? saveError.message : "保存失败",
+      }));
+    } finally {
+      clearTextCellSaving(key);
+    }
+  }
+
+  function applyUpdatedContainerText(
+    original: TableContainerRecord,
+    extraChargeResponsibility: string | null,
+  ) {
+    setContainers((current) =>
+      current.map((row) =>
+        row.rowId === original.rowId
+          ? {
+              ...row,
+              extraChargeResponsibility,
+            }
+          : row,
+      ),
+    );
+  }
+
+  async function commitWarehouseCustomerNote(
+    container: TableContainerRecord,
+    warehouseDetail: WarehouseDetail,
+    value: string,
+  ) {
+    const key = getWarehouseDetailTextKey(
+      container.rowId,
+      warehouseDetail.sourceOrderDetailId,
+      "customerNote",
+    );
+    if (!isAdmin || savingTextCellKeysRef.current.has(key)) return;
+
+    const nextValue = normalizeTextDraft(value);
+    if (nextValue === (warehouseDetail.customerNote ?? null)) return;
+
+    markTextCellSaving(key);
+    setTextCellErrors((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+
+    if (mockLongTable) {
+      applyUpdatedWarehouseDetailText(
+        container,
+        warehouseDetail.sourceOrderDetailId,
+        nextValue,
+      );
+      clearTextCellSaving(key);
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/containers", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind: "warehouseDetailText",
+          sourceOrderId: container.sourceOrderId,
+          sourceOrderDetailId: warehouseDetail.sourceOrderDetailId,
+          field: "customerNote",
+          value: nextValue,
+        }),
+      });
+      const payload = (await response.json()) as {
+        warehouseDetailText?: Pick<
+          WarehouseDetail,
+          "sourceOrderDetailId" | "customerNote"
+        >;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.warehouseDetailText) {
+        throw new Error(payload.error ?? "保存失败");
+      }
+
+      applyUpdatedWarehouseDetailText(
+        container,
+        payload.warehouseDetailText.sourceOrderDetailId,
+        payload.warehouseDetailText.customerNote ?? null,
+      );
+    } catch (saveError) {
+      setTextCellErrors((current) => ({
+        ...current,
+        [key]: saveError instanceof Error ? saveError.message : "保存失败",
+      }));
+    } finally {
+      clearTextCellSaving(key);
+    }
+  }
+
+  function applyUpdatedWarehouseDetailText(
+    original: TableContainerRecord,
+    sourceOrderDetailId: string,
+    customerNote: string | null,
+  ) {
+    setContainers((current) =>
+      current.map((row) =>
+        row.rowId === original.rowId
+          ? {
+              ...row,
+              warehouseDetails: row.warehouseDetails.map((detail) =>
+                detail.sourceOrderDetailId === sourceOrderDetailId
+                  ? {
+                      ...detail,
+                      customerNote,
+                    }
+                  : detail,
+              ),
+            }
+          : row,
+      ),
+    );
+  }
+
   async function uploadAppointmentDocument({
     container,
     warehouseDetail,
@@ -1874,23 +2235,6 @@ export default function ContainerDashboard() {
         },
       },
       {
-        accessorKey: "customerCode",
-        header: "客户代码",
-        size: 118,
-        minSize: 110,
-        cell: ({ getValue }) => valueOrDash(getValue<string | null>()),
-      },
-      {
-        accessorKey: "customerName",
-        header: "客户名称",
-        size: 126,
-        minSize: 118,
-        maxSize: 180,
-        cell: ({ getValue }) => (
-          <TruncatedText className="secondaryText" text={String(getValue() ?? "")} />
-        ),
-      },
-      {
         id: "orderDate",
         accessorFn: (row) => toDateSortValue(row.orderDate),
         header: "订单日期",
@@ -2056,6 +2400,35 @@ export default function ContainerDashboard() {
             }
           />
         ),
+      },
+      {
+        id: "extraChargeResponsibility",
+        header: "额外费用责任",
+        size: 220,
+        minSize: 180,
+        maxSize: 340,
+        enableSorting: false,
+        cell: ({ row }) => {
+          const key = getContainerTextKey(
+            row.original.rowId,
+            "extraChargeResponsibility",
+          );
+
+          return (
+            <InlineEditableTextCell
+              className="extraChargeCell"
+              error={textCellErrors[key]}
+              isSaving={savingTextCells.has(key)}
+              label="额外产生费用及责任"
+              onCommit={(value) =>
+                commitContainerExtraCharge(row.original, value)
+              }
+              placeholder="填写费用或责任"
+              readOnly={!isAdmin}
+              value={row.original.extraChargeResponsibility}
+            />
+          );
+        },
       },
     ];
 
@@ -2342,6 +2715,9 @@ export default function ContainerDashboard() {
     setPickedUp(0);
     setSearchInput("");
     setSearch("");
+    setCustomerSettings(defaultCustomerVisibilitySettings);
+    setSettingsState("idle");
+    setSettingsMessage("");
     setPickupStatus("all");
     setSelectedOperationMode("");
     setDateField("orderDate");
@@ -2655,6 +3031,40 @@ export default function ContainerDashboard() {
         ) : null}
       </section>
 
+      {isAdmin ? (
+        <section className="settingsPanel" aria-label="客户只读字段权限">
+          <div className="settingsSummary">
+            <span className="settingsLabel">客户只读字段权限</span>
+            <strong>控制客户账号可查看的预约字段</strong>
+          </div>
+          <div className="settingsToggleGroup">
+            {customerVisibilityOptions.map((option) => (
+              <label className="settingsToggle" key={option.key}>
+                <input
+                  type="checkbox"
+                  checked={customerSettings[option.key]}
+                  disabled={settingsState === "loading"}
+                  onChange={(event) =>
+                    updateCustomerSetting(option.key, event.currentTarget.checked)
+                  }
+                />
+                <span>{option.label}</span>
+              </label>
+            ))}
+          </div>
+          {settingsMessage ? (
+            <p
+              className={`settingsMessage ${
+                settingsState === "error" ? "isError" : ""
+              }`}
+              role={settingsState === "error" ? "alert" : "status"}
+            >
+              {settingsMessage}
+            </p>
+          ) : null}
+        </section>
+      ) : null}
+
       {!isAdmin && (showPasswordForm || passwordMessage) ? (
         <section className="passwordPanel">
           <form className="passwordForm" onSubmit={handleChangePassword}>
@@ -2938,8 +3348,9 @@ export default function ContainerDashboard() {
                                   <div className="warehouseDetailListHeader">
                                     <span>送仓地点</span>
                                     <span>窗口期</span>
+                                    <span>备注</span>
                                     <span>实际板数</span>
-                                    <span>预约</span>
+                                    <span>预约数</span>
                                   </div>
                                   {container.warehouseDetails.map((detail) => {
                                     const detailKey = getWarehouseDetailKey(
@@ -3004,6 +3415,37 @@ export default function ContainerDashboard() {
                                               }
                                             />
                                           </div>
+                                          <div className="warehouseNoteCell">
+                                            <InlineEditableTextCell
+                                              error={
+                                                textCellErrors[
+                                                  getWarehouseDetailTextKey(
+                                                    container.rowId,
+                                                    detail.sourceOrderDetailId,
+                                                    "customerNote",
+                                                  )
+                                                ]
+                                              }
+                                              isSaving={savingTextCells.has(
+                                                getWarehouseDetailTextKey(
+                                                  container.rowId,
+                                                  detail.sourceOrderDetailId,
+                                                  "customerNote",
+                                                ),
+                                              )}
+                                              label={`${detail.warehousePoint} 仓点备注`}
+                                              onCommit={(value) =>
+                                                commitWarehouseCustomerNote(
+                                                  container,
+                                                  detail,
+                                                  value,
+                                                )
+                                              }
+                                              placeholder="添加备注"
+                                              readOnly={!isAdmin}
+                                              value={detail.customerNote}
+                                            />
+                                          </div>
                                           <div className="warehousePalletCell">
                                             <EditableWarehouseDetailCell
                                               detail={detail}
@@ -3063,7 +3505,8 @@ export default function ContainerDashboard() {
                                             <div className="appointmentTitle">
                                               送仓预约
                                             </div>
-                                            {detail.appointments.length ? (
+                                            {detail.appointments.length &&
+                                            visibleAppointmentColumnCount > 0 ? (
                                               <div
                                                 className={[
                                                   "warehouseAppointmentGrid",
@@ -3071,16 +3514,30 @@ export default function ContainerDashboard() {
                                                 ]
                                                   .filter(Boolean)
                                                   .join(" ")}
+                                                style={appointmentGridStyle}
                                               >
-                                                <div className="warehouseAppointmentHeader">
+                                                <div
+                                                  className="warehouseAppointmentHeader"
+                                                  style={appointmentGridStyle}
+                                                >
                                                   {isAdmin ? (
                                                     <span>客户可见</span>
                                                   ) : null}
-                                                  <span>预约号码</span>
-                                                  <span>送仓日</span>
-                                                  <span>有效板数</span>
-                                                  <span>POD</span>
-                                                  <span>BOL</span>
+                                                  {appointmentColumnSettings.showAppointmentNumber ? (
+                                                    <span>预约号码</span>
+                                                  ) : null}
+                                                  {appointmentColumnSettings.showDeliveryDate ? (
+                                                    <span>送仓日</span>
+                                                  ) : null}
+                                                  {appointmentColumnSettings.showEffectivePallets ? (
+                                                    <span>有效板数</span>
+                                                  ) : null}
+                                                  {appointmentColumnSettings.showPod ? (
+                                                    <span>POD</span>
+                                                  ) : null}
+                                                  {appointmentColumnSettings.showBol ? (
+                                                    <span>BOL</span>
+                                                  ) : null}
                                                 </div>
                                                 {detail.appointments.map(
                                                   (
@@ -3114,6 +3571,7 @@ export default function ContainerDashboard() {
                                                     <div
                                                       className="warehouseAppointmentItem"
                                                       key={`${appointment.sourceAppointmentLineId}-${appointmentIndex}`}
+                                                      style={appointmentGridStyle}
                                                     >
                                                       {isAdmin ? (
                                                         <div className="appointmentVisibilityCell">
@@ -3173,6 +3631,7 @@ export default function ContainerDashboard() {
                                                           ) : null}
                                                         </div>
                                                       ) : null}
+                                                      {appointmentColumnSettings.showAppointmentNumber ? (
                                                       <div>
                                                         <EditableAppointmentCell
                                                           appointment={
@@ -3243,6 +3702,8 @@ export default function ContainerDashboard() {
                                                           }
                                                         />
                                                       </div>
+                                                      ) : null}
+                                                      {appointmentColumnSettings.showDeliveryDate ? (
                                                       <div>
                                                         <EditableAppointmentCell
                                                           appointment={
@@ -3313,6 +3774,8 @@ export default function ContainerDashboard() {
                                                           }
                                                         />
                                                       </div>
+                                                      ) : null}
+                                                      {appointmentColumnSettings.showEffectivePallets ? (
                                                       <div>
                                                         <EditableAppointmentCell
                                                           appointment={
@@ -3383,6 +3846,8 @@ export default function ContainerDashboard() {
                                                           }
                                                         />
                                                       </div>
+                                                      ) : null}
+                                                      {appointmentColumnSettings.showPod ? (
                                                       <div>
                                                         <AppointmentDocumentCell
                                                           appointment={
@@ -3437,6 +3902,8 @@ export default function ContainerDashboard() {
                                                           }
                                                         />
                                                       </div>
+                                                      ) : null}
+                                                      {appointmentColumnSettings.showBol ? (
                                                       <div>
                                                         <AppointmentDocumentCell
                                                           appointment={
@@ -3491,10 +3958,15 @@ export default function ContainerDashboard() {
                                                           }
                                                         />
                                                       </div>
+                                                      ) : null}
                                                     </div>
                                                     );
                                                   },
                                                 )}
+                                              </div>
+                                            ) : detail.appointments.length ? (
+                                              <div className="noAppointments">
+                                                客服暂未开放预约字段
                                               </div>
                                             ) : (
                                               <div className="noAppointments">
@@ -4042,6 +4514,108 @@ function DateValue({ value }: { value: string | null | undefined }) {
   );
 }
 
+function InlineEditableTextCell({
+  className,
+  error,
+  isSaving,
+  label,
+  onCommit,
+  placeholder,
+  readOnly,
+  value,
+}: {
+  className?: string;
+  error?: string;
+  isSaving: boolean;
+  label: string;
+  onCommit: (value: string) => void;
+  placeholder: string;
+  readOnly: boolean;
+  value: string | null | undefined;
+}) {
+  const displayValue = valueOrDash(value);
+  const [isEditing, setIsEditing] = useState(false);
+
+  if (readOnly) {
+    return (
+      <span
+        className={["inlineTextValue", className].filter(Boolean).join(" ")}
+        title={displayValue === "—" ? label : `${label}：${displayValue}`}
+      >
+        {displayValue}
+      </span>
+    );
+  }
+
+  if (isEditing) {
+    return (
+      <span
+        className={[
+          "inlineTextEditor",
+          error ? "hasError" : "",
+          className,
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      >
+        <input
+          key={`${label}:${value ?? ""}`}
+          autoFocus
+          defaultValue={value ?? ""}
+          disabled={isSaving}
+          maxLength={2000}
+          placeholder={placeholder}
+          aria-label={label}
+          onBlur={(event) => {
+            setIsEditing(false);
+            onCommit(event.currentTarget.value);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.currentTarget.blur();
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              setIsEditing(false);
+            }
+          }}
+        />
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className={[
+        "inlineTextButton",
+        error ? "hasError" : "",
+        isSaving ? "isSaving" : "",
+        !value?.trim() ? "isEmpty" : "",
+        className,
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      disabled={isSaving}
+      title={error ?? (displayValue === "—" ? label : `${label}：${displayValue}`)}
+      onClick={() => setIsEditing(true)}
+    >
+      {isSaving ? (
+        <>
+          <LoaderCircle className="cellSpinner" size={13} aria-hidden="true" />
+          <span>保存中</span>
+        </>
+      ) : error ? (
+        <>
+          <AlertCircle size={13} aria-hidden="true" />
+          <span>保存失败</span>
+        </>
+      ) : (
+        <span>{displayValue === "—" ? placeholder : displayValue}</span>
+      )}
+    </button>
+  );
+}
+
 function SortIcon({
   sortDirection,
 }: {
@@ -4212,6 +4786,11 @@ function valueOrDash(value: string | null | undefined) {
   return value && value.trim() ? value : "—";
 }
 
+function normalizeTextDraft(value: string) {
+  const trimmedValue = value.trim();
+  return trimmedValue ? trimmedValue : null;
+}
+
 function numberOrDash(value: number | null | undefined) {
   return value === null || value === undefined ? "—" : String(value);
 }
@@ -4239,6 +4818,31 @@ function formatUsd(value: string | null | undefined) {
 function getBalanceTone(value: string | null | undefined) {
   const amount = Number(value ?? 0);
   return Number.isFinite(amount) && amount > 50000 ? "isDanger" : "isWarning";
+}
+
+function getAppointmentGridTemplate(
+  isAdmin: boolean,
+  settings: CustomerVisibilitySettings,
+) {
+  const columns = [
+    isAdmin ? "minmax(118px, 0.8fr)" : null,
+    settings.showAppointmentNumber ? "minmax(170px, 1.35fr)" : null,
+    settings.showDeliveryDate ? "minmax(120px, 0.9fr)" : null,
+    settings.showEffectivePallets ? "minmax(92px, 0.65fr)" : null,
+    settings.showPod ? "minmax(130px, 0.85fr)" : null,
+    settings.showBol ? "minmax(130px, 0.85fr)" : null,
+  ].filter(Boolean);
+
+  return columns.length ? columns.join(" ") : "minmax(180px, 1fr)";
+}
+
+function getAppointmentGridMinWidth(columnCount: number) {
+  if (columnCount <= 1) return "220px";
+  if (columnCount === 2) return "360px";
+  if (columnCount === 3) return "500px";
+  if (columnCount === 4) return "620px";
+  if (columnCount === 5) return "720px";
+  return "850px";
 }
 
 function getSyncStatusLabel(syncStatus: SyncRunStatus | null) {
@@ -4417,6 +5021,18 @@ function getAppointmentDocumentKey(
 
 function getAppointmentVisibilityKey(rowId: string, sourceOrderDetailId: string) {
   return `${rowId}:${sourceOrderDetailId}:customer-visible`;
+}
+
+function getContainerTextKey(rowId: string, field: EditableContainerTextField) {
+  return `${rowId}:${field}`;
+}
+
+function getWarehouseDetailTextKey(
+  rowId: string,
+  sourceOrderDetailId: string,
+  field: EditableWarehouseDetailTextField,
+) {
+  return `${rowId}:${sourceOrderDetailId}:${field}`;
 }
 
 function getContainerBillKey(rowId: string) {
@@ -4789,7 +5405,11 @@ function getMockContainerPayload({
 
 function createMockContainers(): TableContainerRecord[] {
   const edgeCases: Array<
-    Omit<ContainerRecord, "warehouseDetails" | "billDocument"> & {
+    Omit<
+      ContainerRecord,
+      "warehouseDetails" | "billDocument" | "extraChargeResponsibility"
+    > & {
+      extraChargeResponsibility?: string | null;
       warehouseDetails?: WarehouseDetail[];
       billDocument?: AppointmentDocumentMeta;
     }
@@ -4982,6 +5602,10 @@ function createMockContainers(): TableContainerRecord[] {
       warehousePoints: isUnload
         ? `FAT2, HLI2, MOCK${rowNumber}, Warehouse ${rowNumber}`
         : null,
+      extraChargeResponsibility:
+        rowNumber % 11 === 0
+          ? "产生等候费，责任归属待客服确认后同步给客户。"
+          : null,
       appointments: [],
       billDocument: emptyAppointmentDocument(),
       warehouseDetails: isUnload
@@ -5019,6 +5643,7 @@ function createMockContainers(): TableContainerRecord[] {
   return [...edgeCases, ...generatedRows].map((container, index) => {
     const normalizedContainer: ContainerRecord = {
       ...container,
+      extraChargeResponsibility: container.extraChargeResponsibility ?? null,
       billDocument: container.billDocument ?? emptyAppointmentDocument(),
       warehouseDetails: container.warehouseDetails ?? [],
     };
@@ -5055,6 +5680,10 @@ function createMockWarehouseDetail(
     fba: "-",
     notes: estimatedPallets % 3 === 0 ? "到港后尽快安排派送" : "-",
     po: null,
+    customerNote:
+      estimatedPallets % 4 === 0
+        ? "窗口期较紧，请客户提前准备收货信息。"
+        : null,
     appointments: appointments.map((appointment) => ({
       ...appointment,
       isCustomerVisible: appointment.isCustomerVisible ?? false,

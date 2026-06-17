@@ -26,6 +26,7 @@ export type ContainerRecord = {
   operationModeLabel: string;
   destination: string | null;
   warehousePoints: string | null;
+  extraChargeResponsibility: string | null;
   appointments: DeliveryAppointment[];
   warehouseDetails: WarehouseDetail[];
   billDocument: AppointmentDocumentMeta;
@@ -54,6 +55,7 @@ export type WarehouseDetail = {
   fba: string | null;
   notes: string | null;
   po: string | null;
+  customerNote: string | null;
   appointments: WarehouseAppointment[];
 };
 
@@ -108,6 +110,8 @@ export type EditableWarehouseAppointmentField =
   | "deliveryDate"
   | "effectivePallets";
 export type EditableWarehouseDetailField = "actualPallets";
+export type EditableContainerTextField = "extraChargeResponsibility";
+export type EditableWarehouseDetailTextField = "customerNote";
 export type PickupStatus = "pending" | "picked";
 
 type ContainerRow = {
@@ -123,6 +127,7 @@ type ContainerRow = {
   operation_mode: string | null;
   destination: string | null;
   warehouse_points: string | null;
+  extra_charge_responsibility: string | null;
   appointments: DeliveryAppointmentRow[] | null;
   warehouse_details: WarehouseDetailRow[] | null;
   appointment_documents: AppointmentDocumentRow[] | null;
@@ -152,6 +157,7 @@ type WarehouseDetailRow = {
   fba: string | null;
   notes: string | null;
   po: string | null;
+  customerNote: string | null;
   appointments: WarehouseAppointmentRow[] | null;
 };
 
@@ -684,6 +690,7 @@ export async function getContainers({
           coalesce(pc.manual_operation_mode, pc.source_operation_mode) as operation_mode,
           coalesce(pc.manual_destination, pc.source_destination) as destination,
           coalesce(pc.manual_warehouse_points, pc.source_warehouse_points) as warehouse_points,
+          pc.manual_extra_charge_responsibility as extra_charge_responsibility,
           coalesce(appointment_points.appointments, '[]'::jsonb) as appointments,
           coalesce(warehouse_detail_points.warehouse_details, '[]'::jsonb) as warehouse_details,
           coalesce(document_points.appointment_documents, '[]'::jsonb) as appointment_documents,
@@ -726,6 +733,7 @@ export async function getContainers({
               'fba', pwd.source_fba,
               'notes', pwd.source_notes,
               'po', pwd.source_po,
+              'customerNote', pwd.manual_customer_note,
               'appointments', coalesce(warehouse_appointments.appointments, '[]'::jsonb)
             )
             order by
@@ -868,6 +876,43 @@ export async function updateContainerDate({
   });
 }
 
+export async function updateContainerText({
+  customerId,
+  sourceOrderId,
+  field,
+  value,
+}: {
+  customerId: string;
+  sourceOrderId: string;
+  field: EditableContainerTextField;
+  value: string | null;
+}): Promise<Pick<ContainerRecord, "sourceOrderId" | "extraChargeResponsibility"> | null> {
+  if (field !== "extraChargeResponsibility") return null;
+  const normalizedValue = normalizeTextValue(value);
+
+  return withAppTransaction(async (client) => {
+    const result = await client.query<{
+      sourceOrderId: string;
+      extraChargeResponsibility: string | null;
+    }>(
+      `
+        update public.portal_containers
+        set manual_extra_charge_responsibility = $3,
+            updated_at = now()
+        where source_order_id = $1
+          and source_customer_id = $2
+          and source_active = true
+        returning
+          source_order_id as "sourceOrderId",
+          manual_extra_charge_responsibility as "extraChargeResponsibility"
+      `,
+      [sourceOrderId, customerId, normalizedValue],
+    );
+
+    return rows(result)[0] ?? null;
+  });
+}
+
 export async function updateAppointmentDetail({
   customerId,
   sourceOrderId,
@@ -969,6 +1014,59 @@ export async function updateWarehouseDetail({
     return {
       sourceOrderDetailId,
       actualPallets: normalizedValue,
+    };
+  });
+}
+
+export async function updateWarehouseDetailText({
+  customerId,
+  sourceOrderId,
+  sourceOrderDetailId,
+  field,
+  value,
+}: {
+  customerId: string;
+  sourceOrderId: string;
+  sourceOrderDetailId: string;
+  field: EditableWarehouseDetailTextField;
+  value: string | null;
+}): Promise<Pick<WarehouseDetail, "sourceOrderDetailId" | "customerNote"> | null> {
+  if (field !== "customerNote") return null;
+  const normalizedValue = normalizeTextValue(value);
+  const sourceOrderDetailIds = sourceOrderDetailId
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+
+  if (!sourceOrderDetailIds.length) return null;
+
+  return withAppTransaction(async (client) => {
+    let updatedRows = 0;
+
+    for (const detailId of sourceOrderDetailIds) {
+      const result = await client.query(
+        `
+          update public.portal_warehouse_details pwd
+          set manual_customer_note = $4,
+              updated_at = now()
+          from public.portal_containers pc
+          where pwd.source_order_id = pc.source_order_id
+            and pwd.source_order_id = $1
+            and pwd.source_order_detail_id = $2
+            and pc.source_customer_id = $3
+            and pwd.source_active = true
+            and pc.source_active = true
+        `,
+        [sourceOrderId, detailId, customerId, normalizedValue],
+      );
+      updatedRows += result.rowCount ?? 0;
+    }
+
+    if (!updatedRows) return null;
+
+    return {
+      sourceOrderDetailId,
+      customerNote: normalizedValue,
     };
   });
 }
@@ -1536,6 +1634,7 @@ export async function getSourceContainers({
             nullif(o.delivery_location, '')
           ) as destination,
           detail_points.warehouse_points,
+          null::text as extra_charge_responsibility,
           appointment_points.appointments,
           null::jsonb as warehouse_details,
           null::jsonb as appointment_documents,
@@ -1596,6 +1695,7 @@ function toContainerRecord(
     operationModeLabel: formatOperationMode(row.operation_mode),
     destination: row.destination,
     warehousePoints: row.warehouse_points,
+    extraChargeResponsibility: row.extra_charge_responsibility,
     appointments,
     warehouseDetails,
     billDocument: toContainerBillDocumentMeta(row.bill_document),
@@ -1631,6 +1731,7 @@ function toWarehouseDetail(detail: WarehouseDetailRow): WarehouseDetail {
     fba: detail.fba,
     notes: detail.notes,
     po: detail.po,
+    customerNote: detail.customerNote,
     appointments: (detail.appointments ?? []).map(toWarehouseAppointment),
   };
 }
@@ -1771,6 +1872,7 @@ function buildWarehouseDetails(
         fba: null,
         notes: null,
         po: null,
+        customerNote: null,
         appointments: [
           attachAppointmentDocuments(
             `legacy:${appointment.sourceAppointmentId}`,
@@ -1859,6 +1961,7 @@ function mergeWarehouseDetails(
     fba: mergeText(current.fba, next.fba),
     notes: mergeText(current.notes, next.notes),
     po: mergeText(current.po, next.po),
+    customerNote: mergeText(current.customerNote, next.customerNote),
     appointments: [...current.appointments, ...next.appointments],
   };
 }
@@ -2093,6 +2196,12 @@ function normalizeWarehouseDetailValue(
   }
 
   return null;
+}
+
+function normalizeTextValue(value: string | null | undefined): string | null {
+  const normalized = value?.trim() ?? "";
+  if (!normalized) return null;
+  return normalized.slice(0, 2000);
 }
 
 function formatDateTime(value: Date | string | null): string | null {

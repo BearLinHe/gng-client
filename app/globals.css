@@ -365,6 +365,97 @@ h2 {
   color: var(--danger);
 }
 
+.settingsPanel {
+  display: grid;
+  grid-template-columns: minmax(190px, 0.7fr) minmax(0, 1.3fr) auto;
+  align-items: center;
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  margin-bottom: 12px;
+  padding: 10px 12px;
+}
+
+.settingsSummary {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.settingsLabel {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.settingsSummary strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.settingsToggleGroup {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settingsToggle {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid #dbe5f0;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #334155;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 850;
+  padding: 0 11px;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    color 140ms ease;
+}
+
+.settingsToggle:hover {
+  border-color: #b8d4f0;
+  background: #f0f7ff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+}
+
+.settingsToggle input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+}
+
+.settingsToggle:has(input:not(:checked)) {
+  color: #64748b;
+}
+
+.settingsToggle:has(input:disabled) {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.settingsMessage {
+  margin: 0;
+  color: #166534;
+  font-size: 12px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.settingsMessage.isError {
+  color: var(--danger);
+}
+
 .authShell {
   width: 100%;
   min-height: 100vh;
@@ -1542,8 +1633,8 @@ body.rowDragActive * {
 }
 
 .warehouseDetailsContent {
-  width: min(980px, 100%);
-  min-width: 560px;
+  width: min(1120px, 100%);
+  min-width: 760px;
 }
 
 .detailsHeaderRow {
@@ -1574,6 +1665,108 @@ body.rowDragActive * {
   font-weight: 700;
 }
 
+.inlineTextValue,
+.inlineTextButton,
+.inlineTextEditor {
+  width: 100%;
+  min-width: 0;
+}
+
+.inlineTextValue {
+  display: inline-block;
+  overflow: hidden;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inlineTextButton {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: #26354a;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+  padding: 0 8px;
+  text-align: left;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    color 140ms ease;
+}
+
+.inlineTextButton span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inlineTextButton:hover:not(:disabled) {
+  border-color: #c9dff5;
+  background: #f3f8ff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+}
+
+.inlineTextButton.isEmpty {
+  color: #8a9aac;
+  font-weight: 750;
+}
+
+.inlineTextButton.hasError {
+  border-color: #fecaca;
+  background: #fff7f7;
+  color: #b42318;
+}
+
+.inlineTextButton:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.inlineTextEditor {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+}
+
+.inlineTextEditor input {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  border: 1px solid #a8cff5;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #172033;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  outline: none;
+  padding: 0 9px;
+  box-shadow: 0 0 0 3px rgba(18, 104, 179, 0.12);
+}
+
+.inlineTextEditor.hasError input {
+  border-color: #fecaca;
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.1);
+}
+
+.extraChargeCell {
+  max-width: 100%;
+}
+
 .warehouseDetailList {
   width: 100%;
   background: #ffffff;
@@ -1586,7 +1779,9 @@ body.rowDragActive * {
 .warehouseDetailListHeader,
 .warehouseDetailSummary {
   display: grid;
-  grid-template-columns: 34px minmax(190px, 1fr) minmax(132px, 0.55fr) 132px 86px;
+  grid-template-columns:
+    34px minmax(150px, 1fr) minmax(112px, 0.58fr) minmax(190px, 1.1fr)
+    116px 82px;
   gap: 10px;
   align-items: center;
 }
@@ -1616,6 +1811,10 @@ body.rowDragActive * {
   grid-column: 5;
 }
 
+.warehouseDetailListHeader span:nth-child(5) {
+  grid-column: 6;
+}
+
 .warehouseDetailItem {
   border-bottom: 1px solid #e8eef5;
 }
@@ -1638,6 +1837,7 @@ body.rowDragActive * {
 
 .warehousePointCell,
 .warehouseWindowCell,
+.warehouseNoteCell,
 .warehousePalletCell,
 .warehouseAppointmentItem > div {
   min-width: 0;
@@ -1691,26 +1891,18 @@ body.rowDragActive * {
 .warehouseAppointmentHeader,
 .warehouseAppointmentItem {
   display: grid;
-  grid-template-columns:
-    minmax(170px, 1.4fr)
-    minmax(120px, 0.9fr)
-    minmax(92px, 0.65fr)
-    minmax(130px, 0.85fr)
-    minmax(130px, 0.85fr);
+  grid-template-columns: var(
+    --appointment-grid-template,
+    minmax(170px, 1.4fr) minmax(120px, 0.9fr) minmax(92px, 0.65fr)
+      minmax(130px, 0.85fr) minmax(130px, 0.85fr)
+  );
   gap: 10px;
   align-items: center;
-  min-width: 720px;
+  min-width: var(--appointment-grid-min-width, 720px);
 }
 
 .warehouseAppointmentGrid.isAdmin .warehouseAppointmentHeader,
 .warehouseAppointmentGrid.isAdmin .warehouseAppointmentItem {
-  grid-template-columns:
-    minmax(118px, 0.8fr)
-    minmax(170px, 1.35fr)
-    minmax(120px, 0.9fr)
-    minmax(92px, 0.65fr)
-    minmax(130px, 0.85fr)
-    minmax(130px, 0.85fr);
   min-width: 850px;
 }
 
@@ -2085,6 +2277,15 @@ body.rowDragActive * {
     white-space: normal;
   }
 
+  .settingsPanel {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .settingsMessage {
+    white-space: normal;
+  }
+
   .iconButton {
     flex: 1 1 auto;
   }
@@ -2136,7 +2337,7 @@ body.rowDragActive * {
   }
 
   .warehouseDetailsContent {
-    min-width: 520px;
+    min-width: 720px;
   }
 
   .warehouseAppointmentPanel {

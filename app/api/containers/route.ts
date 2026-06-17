@@ -4,14 +4,18 @@ import { readCustomerSession } from "@/lib/auth";
 import {
   updateAppointmentDetail,
   updateContainerDate,
+  updateContainerText,
   updateWarehouseDetail,
+  updateWarehouseDetailText,
   updateWarehouseAppointmentDetail,
   updateWarehouseAppointmentVisibility,
   getContainers,
   type DateFilterField,
   type EditableAppointmentField,
   type EditableContainerDateField,
+  type EditableContainerTextField,
   type EditableWarehouseDetailField,
+  type EditableWarehouseDetailTextField,
   type EditableWarehouseAppointmentField,
   type PickupStatus,
 } from "@/lib/container-data";
@@ -101,6 +105,25 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ warehouseDetail: updated });
     }
 
+    if (payload.kind === "warehouseDetailText") {
+      const updated = await updateWarehouseDetailText({
+        customerId: customer.id,
+        sourceOrderId: payload.sourceOrderId,
+        sourceOrderDetailId: payload.sourceOrderDetailId,
+        field: payload.field,
+        value: payload.value,
+      });
+
+      if (!updated) {
+        return NextResponse.json(
+          { error: "未找到可更新的仓点备注" },
+          { status: 404 },
+        );
+      }
+
+      return NextResponse.json({ warehouseDetailText: updated });
+    }
+
     if (payload.kind === "warehouseAppointmentVisibility") {
       const updated = await updateWarehouseAppointmentVisibility({
         customerId: customer.id,
@@ -156,6 +179,21 @@ export async function PATCH(request: NextRequest) {
       }
 
       return NextResponse.json({ appointment: updated });
+    }
+
+    if (payload.kind === "containerText") {
+      const updated = await updateContainerText({
+        customerId: customer.id,
+        sourceOrderId: payload.sourceOrderId,
+        field: payload.field,
+        value: payload.value,
+      });
+
+      if (!updated) {
+        return NextResponse.json({ error: "未找到可更新的柜号" }, { status: 404 });
+      }
+
+      return NextResponse.json({ containerText: updated });
     }
 
     const updated = await updateContainerDate({
@@ -228,6 +266,13 @@ function parsePatchPayload(
       value: string | null;
     }
   | {
+      kind: "warehouseDetailText";
+      sourceOrderId: string;
+      sourceOrderDetailId: string;
+      field: EditableWarehouseDetailTextField;
+      value: string | null;
+    }
+  | {
       kind: "warehouseAppointment";
       sourceOrderId: string;
       sourceOrderDetailId: string;
@@ -240,6 +285,12 @@ function parsePatchPayload(
       sourceOrderId: string;
       sourceOrderDetailId: string;
       sourceAppointmentLineId: string | null;
+    }
+  | {
+      kind: "containerText";
+      sourceOrderId: string;
+      field: EditableContainerTextField;
+      value: string | null;
     }
   | null {
   if (!value || typeof value !== "object") return null;
@@ -279,6 +330,24 @@ function parsePatchPayload(
 
     return {
       kind: "warehouseDetail",
+      sourceOrderId: body.sourceOrderId.trim(),
+      sourceOrderDetailId: body.sourceOrderDetailId.trim(),
+      field: body.field,
+      value: parsedValue,
+    };
+  }
+
+  if (body.kind === "warehouseDetailText") {
+    if (
+      typeof body.sourceOrderDetailId !== "string" ||
+      !body.sourceOrderDetailId.trim() ||
+      !isEditableWarehouseDetailTextField(body.field)
+    ) {
+      return null;
+    }
+
+    return {
+      kind: "warehouseDetailText",
       sourceOrderId: body.sourceOrderId.trim(),
       sourceOrderDetailId: body.sourceOrderDetailId.trim(),
       field: body.field,
@@ -350,6 +419,17 @@ function parsePatchPayload(
     };
   }
 
+  if (body.kind === "containerText") {
+    if (!isEditableContainerTextField(body.field)) return null;
+
+    return {
+      kind: "containerText",
+      sourceOrderId: body.sourceOrderId.trim(),
+      field: body.field,
+      value: parsedValue,
+    };
+  }
+
   if (!isEditableDateField(body.field)) {
     return null;
   }
@@ -366,6 +446,18 @@ function isEditableWarehouseDetailField(
   value: unknown,
 ): value is EditableWarehouseDetailField {
   return value === "actualPallets";
+}
+
+function isEditableWarehouseDetailTextField(
+  value: unknown,
+): value is EditableWarehouseDetailTextField {
+  return value === "customerNote";
+}
+
+function isEditableContainerTextField(
+  value: unknown,
+): value is EditableContainerTextField {
+  return value === "extraChargeResponsibility";
 }
 
 function isEditableWarehouseAppointmentField(
