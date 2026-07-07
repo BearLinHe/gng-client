@@ -21,6 +21,7 @@ import {
   Settings,
   Upload,
   UserRound,
+  UsersRound,
 } from "lucide-react";
 import {
   flexRender,
@@ -57,6 +58,7 @@ type CustomerOption = {
 
 type CustomerBalance = {
   balanceDueUsd: string;
+  inventoryRemainingPallets: number;
   updatedAt: string | null;
 };
 
@@ -208,6 +210,11 @@ const customerVisibilityOptions: Array<{
 
 export default function ContainerDashboard() {
   const [customer, setCustomer] = useState<CustomerOption | null>(null);
+  const [customerOptions, setCustomerOptions] = useState<CustomerOption[]>([]);
+  const [customerSwitchCode, setCustomerSwitchCode] = useState("");
+  const [customerSwitchState, setCustomerSwitchState] =
+    useState<LoadState>("idle");
+  const [customerSwitchMessage, setCustomerSwitchMessage] = useState("");
   const [customerBalance, setCustomerBalance] =
     useState<CustomerBalance | null>(null);
   const [customerSettings, setCustomerSettings] =
@@ -447,6 +454,7 @@ export default function ContainerDashboard() {
       const payload = (await response.json()) as { customer: CustomerOption };
       if (!ignore) {
         setCustomer(payload.customer);
+        setCustomerSwitchCode(payload.customer.code ?? "");
         setAuthChecked(true);
       }
     }
@@ -466,6 +474,79 @@ export default function ContainerDashboard() {
   useEffect(() => {
     let ignore = false;
 
+    if (!customer || customer.role !== "admin") {
+      setCustomerOptions([]);
+      setCustomerSwitchCode("");
+      setCustomerSwitchState("idle");
+      setCustomerSwitchMessage("");
+      return;
+    }
+    const activeCustomer = customer;
+
+    if (mockLongTable) {
+      const mockOptions = [
+        activeCustomer,
+        {
+          id: "mock-customer-2",
+          code: "MEITONG-OAK",
+          name: "MEITONG",
+          role: "admin" as const,
+        },
+        {
+          id: "mock-customer-3",
+          code: "XINGHANG-OAK",
+          name: "XINGHANG（星航）",
+          role: "admin" as const,
+        },
+      ];
+      setCustomerOptions(mockOptions);
+      setCustomerSwitchCode(activeCustomer.code ?? "");
+      setCustomerSwitchState("idle");
+      setCustomerSwitchMessage("");
+      return;
+    }
+
+    async function loadCustomerOptions() {
+      setCustomerSwitchState("loading");
+      setCustomerSwitchMessage("");
+
+      const response = await fetch("/api/customers");
+      const payload = (await response.json()) as {
+        customers?: CustomerOption[];
+        error?: string;
+      };
+
+      if (!response.ok || !payload.customers) {
+        throw new Error(payload.error ?? "客户列表读取失败");
+      }
+
+      if (!ignore) {
+        setCustomerOptions(payload.customers);
+        setCustomerSwitchCode(activeCustomer.code ?? "");
+        setCustomerSwitchState("idle");
+      }
+    }
+
+    loadCustomerOptions().catch((switchError) => {
+      if (!ignore) {
+        setCustomerOptions([]);
+        setCustomerSwitchState("error");
+        setCustomerSwitchMessage(
+          switchError instanceof Error
+            ? switchError.message
+            : "客户列表读取失败",
+        );
+      }
+    });
+
+    return () => {
+      ignore = true;
+    };
+  }, [customer, mockLongTable]);
+
+  useEffect(() => {
+    let ignore = false;
+
     if (!customer) {
       setCustomerBalance(null);
       setBalanceDraft("");
@@ -477,6 +558,7 @@ export default function ContainerDashboard() {
     if (mockLongTable) {
       const mockBalance = {
         balanceDueUsd: "1234.56",
+        inventoryRemainingPallets: 128,
         updatedAt: null,
       };
       setCustomerBalance(mockBalance);
@@ -798,6 +880,89 @@ export default function ContainerDashboard() {
     setRefreshTick((value) => value + 1);
   }
 
+  function resetCustomerScopedUi() {
+    setPage(1);
+    setContainers([]);
+    setExpandedContainers(new Set());
+    setExpandedWarehouseDetails(new Set());
+    setTotalCount(0);
+    setAllContainers(0);
+    setPendingPickup(0);
+    setPickedUp(0);
+    setSearchInput("");
+    setSearch("");
+    setPickupStatus("all");
+    setSelectedOperationMode("");
+    setDateField("orderDate");
+    setDateFrom("");
+    setDateTo("");
+    setEditingDateCell(null);
+    setDateDraft("");
+    setEditingAppointmentCell(null);
+    setAppointmentDraft("");
+    setAppointmentCellErrors({});
+    setEditingWarehouseDetailCell(null);
+    setWarehouseDetailDraft("");
+    setWarehouseDetailCellErrors({});
+  }
+
+  async function handleSwitchCustomer() {
+    if (!isAdmin || customerSwitchState === "loading") return;
+
+    const targetCode = customerSwitchCode.trim();
+    if (!targetCode || targetCode.toLowerCase() === customer?.code?.toLowerCase()) {
+      return;
+    }
+
+    setCustomerSwitchState("loading");
+    setCustomerSwitchMessage("");
+
+    if (mockLongTable) {
+      const nextCustomer =
+        customerOptions.find(
+          (option) => option.code?.toLowerCase() === targetCode.toLowerCase(),
+        ) ?? null;
+      if (nextCustomer) {
+        setCustomer(nextCustomer);
+        resetCustomerScopedUi();
+        setRefreshTick((value) => value + 1);
+        setCustomerSwitchState("idle");
+      } else {
+        setCustomerSwitchState("error");
+        setCustomerSwitchMessage("客户不存在");
+      }
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/auth/switch-customer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: targetCode }),
+      });
+      const payload = (await response.json()) as {
+        customer?: CustomerOption;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.customer) {
+        throw new Error(payload.error ?? "客户切换失败");
+      }
+
+      setCustomer(payload.customer);
+      setCustomerSwitchCode(payload.customer.code ?? "");
+      setCustomerSwitchState("idle");
+      resetCustomerScopedUi();
+      setRefreshTick((value) => value + 1);
+      setSyncStatusTick((value) => value + 1);
+    } catch (switchError) {
+      setCustomerSwitchState("error");
+      setCustomerSwitchMessage(
+        switchError instanceof Error ? switchError.message : "客户切换失败",
+      );
+    }
+  }
+
   async function runSourceSync() {
     if (!isAdmin || syncActionState === "loading") return;
 
@@ -863,6 +1028,7 @@ export default function ContainerDashboard() {
     if (mockLongTable) {
       const mockBalance = {
         balanceDueUsd: normalizedBalance,
+        inventoryRemainingPallets: customerBalance?.inventoryRemainingPallets ?? 0,
         updatedAt: new Date().toISOString(),
       };
       setCustomerBalance(mockBalance);
@@ -2690,6 +2856,7 @@ export default function ContainerDashboard() {
       }
 
       setCustomer(payload.customer);
+      setCustomerSwitchCode(payload.customer.code ?? "");
       setLoginCode("");
       setLoginPassword("");
       setPage(1);
@@ -2706,6 +2873,10 @@ export default function ContainerDashboard() {
   async function handleLogout() {
     await fetch("/api/auth/logout", { method: "POST" });
     setCustomer(null);
+    setCustomerOptions([]);
+    setCustomerSwitchCode("");
+    setCustomerSwitchState("idle");
+    setCustomerSwitchMessage("");
     setContainers([]);
     setExpandedContainers(new Set());
     setExpandedWarehouseDetails(new Set());
@@ -2922,6 +3093,54 @@ export default function ContainerDashboard() {
         </div>
         <div className="topActions">
           {isAdmin ? (
+            <div
+              className="customerSwitcher"
+              title={
+                customerSwitchMessage ||
+                "切换后将以客服编辑身份查看所选客户"
+              }
+            >
+              <UsersRound size={16} aria-hidden="true" />
+              <select
+                value={customerSwitchCode}
+                onChange={(event) => setCustomerSwitchCode(event.target.value)}
+                aria-label="切换客户账户"
+                disabled={customerSwitchState === "loading"}
+              >
+                {customerOptions.length === 0 ? (
+                  <option value={customer.code ?? ""}>
+                    {customer.name}
+                  </option>
+                ) : (
+                  customerOptions.map((option) => (
+                    <option key={option.id} value={option.code ?? ""}>
+                      {option.code ? `${option.name} · ${option.code}` : option.name}
+                    </option>
+                  ))
+                )}
+              </select>
+              <button
+                className="switchCustomerButton"
+                type="button"
+                onClick={handleSwitchCustomer}
+                disabled={
+                  customerSwitchState === "loading" ||
+                  !customerSwitchCode ||
+                  customerSwitchCode.toLowerCase() === customer.code?.toLowerCase()
+                }
+              >
+                {customerSwitchState === "loading" ? (
+                  <LoaderCircle
+                    className="buttonSpinner"
+                    size={14}
+                    aria-hidden="true"
+                  />
+                ) : null}
+                切换
+              </button>
+            </div>
+          ) : null}
+          {isAdmin ? (
             <div className={syncStatusClass} title={getSyncStatusTitle(syncStatus)}>
               <span className="syncStatusDot" aria-hidden="true" />
               <div>
@@ -2991,12 +3210,22 @@ export default function ContainerDashboard() {
 
       <section className="balancePanel" aria-label="未结账款">
         <div className="balanceSummary">
-          <span className="balanceLabel">未结账款</span>
-          <strong className={balanceAmountClass}>
-            {balanceState === "loading" && !customerBalance
-              ? "读取中..."
-              : formatUsd(customerBalance?.balanceDueUsd)}
-          </strong>
+          <div className="balanceMetric">
+            <span className="balanceLabel">未结账款</span>
+            <strong className={balanceAmountClass}>
+              {balanceState === "loading" && !customerBalance
+                ? "读取中..."
+                : formatUsd(customerBalance?.balanceDueUsd)}
+            </strong>
+          </div>
+          <div className="balanceMetric">
+            <span className="balanceLabel">剩余板数</span>
+            <strong className="inventoryAmount">
+              {balanceState === "loading" && !customerBalance
+                ? "读取中..."
+                : `${formatInteger(customerBalance?.inventoryRemainingPallets)} 板`}
+            </strong>
+          </div>
         </div>
         {isAdmin ? (
           <form className="balanceForm" onSubmit={handleSaveBalance}>
@@ -4812,6 +5041,13 @@ function formatUsd(value: string | null | undefined) {
   return new Intl.NumberFormat("en-US", {
     currency: "USD",
     style: "currency",
+  }).format(Number.isFinite(amount) ? amount : 0);
+}
+
+function formatInteger(value: number | null | undefined) {
+  const amount = Number(value ?? 0);
+  return new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 0,
   }).format(Number.isFinite(amount) ? amount : 0);
 }
 

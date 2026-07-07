@@ -6,11 +6,13 @@ import {
 
 export type CustomerBalance = {
   balanceDueUsd: string;
+  inventoryRemainingPallets: number;
   updatedAt: string | null;
 };
 
 type BalanceRow = {
   balanceDueUsd: string | number | null;
+  inventoryRemainingPallets: string | number | null;
   updatedAt: Date | string | null;
 };
 
@@ -22,6 +24,7 @@ export async function getCustomerBalance(
       `
         select
           balance_due_usd as "balanceDueUsd",
+          inventory_remaining_pallets as "inventoryRemainingPallets",
           updated_at as "updatedAt"
         from public.portal_customers
         where source_customer_id = $1
@@ -54,6 +57,7 @@ export async function updateCustomerBalance({
           and source_active = true
         returning
           balance_due_usd as "balanceDueUsd",
+          inventory_remaining_pallets as "inventoryRemainingPallets",
           updated_at as "updatedAt"
       `,
       [customerId, balanceDueUsd],
@@ -67,6 +71,9 @@ export async function updateCustomerBalance({
 function toCustomerBalance(balance: BalanceRow): CustomerBalance {
   return {
     balanceDueUsd: normalizeCurrencyValue(balance.balanceDueUsd),
+    inventoryRemainingPallets: normalizeIntegerValue(
+      balance.inventoryRemainingPallets,
+    ),
     updatedAt: formatDateTime(balance.updatedAt),
   };
 }
@@ -74,6 +81,11 @@ function toCustomerBalance(balance: BalanceRow): CustomerBalance {
 function normalizeCurrencyValue(value: string | number | null) {
   const amount = Number(value ?? 0);
   return Number.isFinite(amount) ? amount.toFixed(2) : "0.00";
+}
+
+function normalizeIntegerValue(value: string | number | null) {
+  const amount = Number(value ?? 0);
+  return Number.isFinite(amount) ? Math.max(0, Math.trunc(amount)) : 0;
 }
 
 function formatDateTime(value: Date | string | null) {

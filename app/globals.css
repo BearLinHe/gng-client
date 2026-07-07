@@ -167,6 +167,65 @@ h2 {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.customerSwitcher {
+  min-width: 260px;
+  max-width: 420px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #cfe0f2;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #5f7591;
+  padding: 4px 5px 4px 10px;
+}
+
+.customerSwitcher select {
+  min-width: 0;
+  width: 220px;
+  flex: 1 1 auto;
+  border: 0;
+  background: transparent;
+  color: #172033;
+  font-size: 13px;
+  font-weight: 800;
+  outline: none;
+}
+
+.customerSwitcher:focus-within {
+  border-color: #84bdeb;
+  box-shadow: 0 0 0 3px rgba(18, 104, 179, 0.12);
+}
+
+.switchCustomerButton {
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid #b8d8f5;
+  border-radius: 8px;
+  background: #eef6fd;
+  color: var(--accent-strong);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 900;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.switchCustomerButton:hover:not(:disabled) {
+  background: #e0f0fc;
+}
+
+.switchCustomerButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .syncStatusPill {
@@ -254,8 +313,23 @@ h2 {
 .balanceSummary {
   min-width: 0;
   display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.balanceMetric {
+  min-width: 0;
+  display: inline-flex;
   align-items: baseline;
   gap: 10px;
+  border-right: 1px solid #e2e8f0;
+  padding-right: 12px;
+}
+
+.balanceMetric:last-child {
+  border-right: 0;
+  padding-right: 0;
 }
 
 .balanceLabel {
@@ -281,6 +355,16 @@ h2 {
 .balanceAmount.isDanger {
   background: #fee2e2;
   color: #b42318;
+}
+
+.inventoryAmount {
+  border-radius: 999px;
+  background: #eaf6ff;
+  color: #075985;
+  font-size: 22px;
+  line-height: 1;
+  padding: 3px 8px;
+  white-space: nowrap;
 }
 
 .balanceForm {
@@ -2242,6 +2326,15 @@ body.rowDragActive * {
     flex-wrap: wrap;
   }
 
+  .customerSwitcher {
+    width: 100%;
+    max-width: none;
+  }
+
+  .customerSwitcher select {
+    width: 100%;
+  }
+
   .syncStatusPill {
     width: 100%;
     border-radius: 10px;
@@ -2262,6 +2355,11 @@ body.rowDragActive * {
     align-items: flex-start;
     flex-direction: column;
     gap: 5px;
+  }
+
+  .balanceMetric {
+    border-right: 0;
+    padding-right: 0;
   }
 
   .balanceForm {
