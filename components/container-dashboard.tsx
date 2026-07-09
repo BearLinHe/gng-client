@@ -121,6 +121,7 @@ type EditableContainerTextField = "extraChargeResponsibility";
 type EditableWarehouseDetailTextField = "customerNote";
 type AppointmentDocumentType = "pod" | "bol";
 type PickupStatus = "all" | "pending" | "picked";
+type WarehouseDeliveryProgressFilter = "all" | "incomplete" | "complete";
 
 type DeliveryAppointment = {
   sourceAppointmentId: string;
@@ -169,6 +170,8 @@ type AppointmentDocumentMeta = {
   mimeType: string | null;
   fileSize: number | null;
   uploadedAt: string | null;
+  downloadCount: number;
+  lastDownloadedAt: string | null;
 };
 
 type ContainerPayload = {
@@ -235,6 +238,8 @@ export default function ContainerDashboard() {
   const [pendingPickup, setPendingPickup] = useState(0);
   const [pickedUp, setPickedUp] = useState(0);
   const [pickupStatus, setPickupStatus] = useState<PickupStatus>("all");
+  const [warehouseDeliveryProgressFilter, setWarehouseDeliveryProgressFilter] =
+    useState<WarehouseDeliveryProgressFilter>("all");
   const [selectedOperationMode, setSelectedOperationMode] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
@@ -686,7 +691,15 @@ export default function ContainerDashboard() {
 
   useEffect(() => {
     setPage(1);
-  }, [dateField, dateFrom, dateTo, pickupStatus, selectedOperationMode, search]);
+  }, [
+    dateField,
+    dateFrom,
+    dateTo,
+    pickupStatus,
+    selectedOperationMode,
+    search,
+    warehouseDeliveryProgressFilter,
+  ]);
 
   useEffect(() => {
     let ignore = false;
@@ -701,6 +714,7 @@ export default function ContainerDashboard() {
         dateField,
         dateFrom,
         dateTo,
+        warehouseDeliveryProgressFilter,
         pickupStatus,
         page,
         pageSize: PAGE_SIZE,
@@ -749,6 +763,9 @@ export default function ContainerDashboard() {
       if (dateTo) params.set("dateTo", dateTo);
     }
     if (pickupStatus !== "all") params.set("pickupStatus", pickupStatus);
+    if (warehouseDeliveryProgressFilter !== "all") {
+      params.set("warehouseDeliveryProgress", warehouseDeliveryProgressFilter);
+    }
     params.set("page", String(page));
     params.set("pageSize", String(PAGE_SIZE));
 
@@ -818,6 +835,7 @@ export default function ContainerDashboard() {
     refreshTick,
     selectedOperationMode,
     search,
+    warehouseDeliveryProgressFilter,
     page,
   ]);
 
@@ -861,7 +879,14 @@ export default function ContainerDashboard() {
     ),
   } as CSSProperties;
   const hasActiveFilters =
-    Boolean(searchInput.trim() || search || selectedOperationMode || dateFrom || dateTo) ||
+    Boolean(
+      searchInput.trim() ||
+        search ||
+        selectedOperationMode ||
+        dateFrom ||
+        dateTo,
+    ) ||
+    warehouseDeliveryProgressFilter !== "all" ||
     pickupStatus !== "all";
 
   function resetFilters() {
@@ -871,6 +896,7 @@ export default function ContainerDashboard() {
     setDateField("orderDate");
     setDateFrom("");
     setDateTo("");
+    setWarehouseDeliveryProgressFilter("all");
     setPickupStatus("all");
     setPage(1);
   }
@@ -1810,10 +1836,11 @@ export default function ContainerDashboard() {
     const key = getAppointmentVisibilityKey(
       container.rowId,
       sourceOrderDetailId,
+      appointment.sourceAppointmentLineId,
     );
 
     if (savingAppointmentVisibilityKeysRef.current.has(key)) return;
-    if (appointment.isCustomerVisible) return;
+    const nextIsCustomerVisible = !appointment.isCustomerVisible;
 
     markAppointmentVisibilitySaving(key);
     setAppointmentVisibilityErrors((current) => {
@@ -1826,7 +1853,23 @@ export default function ContainerDashboard() {
       applyUpdatedAppointmentVisibility(
         container,
         sourceOrderDetailId,
-        appointment.sourceAppointmentLineId,
+        nextIsCustomerVisible
+          ? Array.from(
+              new Set([
+                ...warehouseDetail.appointments
+                  .filter((item) => item.isCustomerVisible)
+                  .map((item) => item.sourceAppointmentLineId),
+                appointment.sourceAppointmentLineId,
+              ]),
+            )
+          : warehouseDetail.appointments
+              .filter(
+                (item) =>
+                  item.isCustomerVisible &&
+                  item.sourceAppointmentLineId !==
+                    appointment.sourceAppointmentLineId,
+              )
+              .map((item) => item.sourceAppointmentLineId),
       );
       clearAppointmentVisibilitySaving(key);
       return;
@@ -1841,12 +1884,13 @@ export default function ContainerDashboard() {
           sourceOrderId: container.sourceOrderId,
           sourceOrderDetailId,
           sourceAppointmentLineId: appointment.sourceAppointmentLineId,
+          isCustomerVisible: nextIsCustomerVisible,
         }),
       });
       const payload = (await response.json()) as {
         warehouseAppointmentVisibility?: {
           sourceOrderDetailId: string;
-          sourceAppointmentLineId: string | null;
+          visibleSourceAppointmentLineIds: string[];
         };
         error?: string;
       };
@@ -1858,7 +1902,7 @@ export default function ContainerDashboard() {
       applyUpdatedAppointmentVisibility(
         container,
         payload.warehouseAppointmentVisibility.sourceOrderDetailId,
-        payload.warehouseAppointmentVisibility.sourceAppointmentLineId,
+        payload.warehouseAppointmentVisibility.visibleSourceAppointmentLineIds,
       );
     } catch (saveError) {
       setAppointmentVisibilityErrors((current) => ({
@@ -1873,26 +1917,40 @@ export default function ContainerDashboard() {
   function applyUpdatedAppointmentVisibility(
     original: TableContainerRecord,
     sourceOrderDetailId: string,
-    sourceAppointmentLineId: string | null,
+    visibleSourceAppointmentLineIds: string[],
   ) {
+    const visibleLineIdSet = new Set(visibleSourceAppointmentLineIds);
+
     setContainers((current) =>
       current.map((row) =>
         row.rowId === original.rowId
           ? {
               ...row,
-              warehouseDetails: row.warehouseDetails.map((detail) => ({
-                ...detail,
-                appointments: detail.appointments.map((appointment) =>
-                  appointment.sourceOrderDetailId === sourceOrderDetailId
-                    ? {
-                        ...appointment,
-                        isCustomerVisible:
-                          appointment.sourceAppointmentLineId ===
-                          sourceAppointmentLineId,
-                      }
-                    : appointment,
-                ),
-              })),
+              warehouseDetails: row.warehouseDetails.map((detail) => {
+                const isSameDetail =
+                  detail.sourceOrderDetailId === sourceOrderDetailId;
+                const hasMatchingAppointment = detail.appointments.some(
+                  (appointment) =>
+                    appointment.sourceOrderDetailId === sourceOrderDetailId,
+                );
+
+                if (!isSameDetail && !hasMatchingAppointment) return detail;
+
+                return {
+                  ...detail,
+                  appointments: detail.appointments.map((appointment) =>
+                    isSameDetail ||
+                    appointment.sourceOrderDetailId === sourceOrderDetailId
+                      ? {
+                          ...appointment,
+                          isCustomerVisible: visibleLineIdSet.has(
+                            appointment.sourceAppointmentLineId,
+                          ),
+                        }
+                      : appointment,
+                  ),
+                };
+              }),
             }
           : row,
       ),
@@ -2114,6 +2172,8 @@ export default function ContainerDashboard() {
           mimeType: file.type || guessDocumentMimeType(file.name),
           fileSize: file.size,
           uploadedAt: new Date().toISOString(),
+          downloadCount: 0,
+          lastDownloadedAt: null,
         },
       );
       return;
@@ -2237,6 +2297,8 @@ export default function ContainerDashboard() {
         mimeType: file.type || guessDocumentMimeType(file.name),
         fileSize: file.size,
         uploadedAt: new Date().toISOString(),
+        downloadCount: 0,
+        lastDownloadedAt: null,
       });
       return;
     }
@@ -2543,11 +2605,23 @@ export default function ContainerDashboard() {
         ),
       },
       {
+        id: "warehouseDeliveryProgress",
+        header: "送仓进度",
+        accessorFn: (row) => getWarehouseDeliveryProgress(row).percent,
+        size: 138,
+        minSize: 128,
+        maxSize: 170,
+        sortingFn: "basic",
+        cell: ({ row }) => (
+          <WarehouseDeliveryProgressCell container={row.original} />
+        ),
+      },
+      {
         id: "bill",
         header: "账单",
-        size: 132,
-        minSize: 122,
-        maxSize: 150,
+        size: 176,
+        minSize: 164,
+        maxSize: 210,
         enableSorting: false,
         cell: ({ row }) => (
           <ContainerBillCell
@@ -3358,6 +3432,22 @@ export default function ContainerDashboard() {
 
         <label className="field compactField">
           <select
+            value={warehouseDeliveryProgressFilter}
+            onChange={(event) =>
+              setWarehouseDeliveryProgressFilter(
+                event.target.value as WarehouseDeliveryProgressFilter,
+              )
+            }
+            aria-label="送仓进度"
+          >
+            <option value="all">全部进度</option>
+            <option value="incomplete">未完成送仓</option>
+            <option value="complete">已完成送仓</option>
+          </select>
+        </label>
+
+        <label className="field compactField">
+          <select
             value={dateField}
             onChange={(event) =>
               setDateField(event.target.value as DateFilterField)
@@ -3588,6 +3678,8 @@ export default function ContainerDashboard() {
                                     );
                                     const isDetailExpanded =
                                       expandedWarehouseDetails.has(detailKey);
+                                    const noteDisplayValue =
+                                      getWarehouseDetailNoteDisplayValue(detail);
 
                                     return (
                                       <section
@@ -3663,6 +3755,7 @@ export default function ContainerDashboard() {
                                                 ),
                                               )}
                                               label={`${detail.warehousePoint} 仓点备注`}
+                                              editValue={detail.customerNote}
                                               onCommit={(value) =>
                                                 commitWarehouseCustomerNote(
                                                   container,
@@ -3672,7 +3765,7 @@ export default function ContainerDashboard() {
                                               }
                                               placeholder="添加备注"
                                               readOnly={!isAdmin}
-                                              value={detail.customerNote}
+                                              value={noteDisplayValue}
                                             />
                                           </div>
                                           <div className="warehousePalletCell">
@@ -3782,6 +3875,7 @@ export default function ContainerDashboard() {
                                                       getAppointmentVisibilityKey(
                                                         container.rowId,
                                                         sourceOrderDetailId,
+                                                        appointment.sourceAppointmentLineId,
                                                       );
                                                     const canSelectVisibility =
                                                       canSelectAppointmentVisibility(
@@ -3821,8 +3915,8 @@ export default function ContainerDashboard() {
                                                             title={
                                                               canSelectVisibility
                                                                 ? appointment.isCustomerVisible
-                                                                  ? "客户只读页面正在显示这条预约"
-                                                                  : "设置为客户只读页面显示的预约"
+                                                                  ? "点击后客户只读页面不再显示这条预约"
+                                                                  : "点击后客户只读页面显示这条预约"
                                                                 : "旧预约数据暂不支持指定客户可见"
                                                             }
                                                             onClick={() =>
@@ -3846,8 +3940,8 @@ export default function ContainerDashboard() {
                                                             )}
                                                             <span>
                                                               {appointment.isCustomerVisible
-                                                                ? "客户可见"
-                                                                : "设为可见"}
+                                                                ? "已显示"
+                                                                : "显示"}
                                                             </span>
                                                           </button>
                                                           {visibilityError ? (
@@ -4620,6 +4714,9 @@ function AppointmentDocumentCell({
       ) : (
         <span className="documentEmpty">未上传</span>
       )}
+      {isAdmin && document.hasFile ? (
+        <DocumentDownloadStatus document={document} />
+      ) : null}
       {canUpload ? (
         <label
           className={[
@@ -4692,6 +4789,9 @@ function ContainerBillCell({
       ) : (
         <span className="documentEmpty">未上传</span>
       )}
+      {isAdmin && document.hasFile ? (
+        <DocumentDownloadStatus document={document} />
+      ) : null}
       {isAdmin ? (
         <label
           className={[
@@ -4733,6 +4833,64 @@ function ContainerBillCell({
   );
 }
 
+function WarehouseDeliveryProgressCell({
+  container,
+}: {
+  container: TableContainerRecord;
+}) {
+  const progress = getWarehouseDeliveryProgress(container);
+
+  if (!progress.total) {
+    return <span className="deliveryProgressEmpty">—</span>;
+  }
+
+  return (
+    <div
+      className="deliveryProgressCell"
+      title={`${progress.completed}/${progress.total} 个仓点已上传 POD，送仓进度 ${progress.percent}%`}
+    >
+      <div className="deliveryProgressMeta">
+        <span>{progress.percent}%</span>
+        <span>
+          {progress.completed}/{progress.total}
+        </span>
+      </div>
+      <div
+        className="deliveryProgressTrack"
+        aria-hidden="true"
+      >
+        <span style={{ width: `${progress.percent}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function DocumentDownloadStatus({
+  document,
+}: {
+  document: AppointmentDocumentMeta;
+}) {
+  const downloadCount = document.downloadCount || 0;
+
+  return (
+    <span
+      className={[
+        "documentDownloadStatus",
+        downloadCount > 0 ? "downloaded" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      title={
+        document.lastDownloadedAt
+          ? `最后下载：${document.lastDownloadedAt}`
+          : "客户还没有下载"
+      }
+    >
+      {downloadCount > 0 ? `已下载 ${downloadCount} 次` : "未下载"}
+    </span>
+  );
+}
+
 function DateValue({ value }: { value: string | null | undefined }) {
   const displayValue = valueOrDash(value);
 
@@ -4745,6 +4903,7 @@ function DateValue({ value }: { value: string | null | undefined }) {
 
 function InlineEditableTextCell({
   className,
+  editValue,
   error,
   isSaving,
   label,
@@ -4754,6 +4913,7 @@ function InlineEditableTextCell({
   value,
 }: {
   className?: string;
+  editValue?: string | null | undefined;
   error?: string;
   isSaving: boolean;
   label: string;
@@ -4763,6 +4923,7 @@ function InlineEditableTextCell({
   value: string | null | undefined;
 }) {
   const displayValue = valueOrDash(value);
+  const inputValue = editValue ?? value ?? "";
   const [isEditing, setIsEditing] = useState(false);
 
   if (readOnly) {
@@ -4788,9 +4949,9 @@ function InlineEditableTextCell({
           .join(" ")}
       >
         <input
-          key={`${label}:${value ?? ""}`}
+          key={`${label}:${inputValue}`}
           autoFocus
-          defaultValue={value ?? ""}
+          defaultValue={inputValue}
           disabled={isSaving}
           maxLength={2000}
           placeholder={placeholder}
@@ -5255,8 +5416,12 @@ function getAppointmentDocumentKey(
   return `${rowId}:${sourceOrderDetailId}:${sourceAppointmentLineId}:${documentType}`;
 }
 
-function getAppointmentVisibilityKey(rowId: string, sourceOrderDetailId: string) {
-  return `${rowId}:${sourceOrderDetailId}:customer-visible`;
+function getAppointmentVisibilityKey(
+  rowId: string,
+  sourceOrderDetailId: string,
+  sourceAppointmentLineId: string,
+) {
+  return `${rowId}:${sourceOrderDetailId}:${sourceAppointmentLineId}:customer-visible`;
 }
 
 function getContainerTextKey(rowId: string, field: EditableContainerTextField) {
@@ -5540,6 +5705,8 @@ function emptyAppointmentDocument(): AppointmentDocumentMeta {
     mimeType: null,
     fileSize: null,
     uploadedAt: null,
+    downloadCount: 0,
+    lastDownloadedAt: null,
   };
 }
 
@@ -5582,12 +5749,34 @@ function getLocationText(container: ContainerRecord) {
   return container.destination ?? warehouseDetailText ?? container.warehousePoints;
 }
 
+function getWarehouseDetailNoteDisplayValue(detail: WarehouseDetail) {
+  if (detail.appointments.some((appointment) => appointment.podDocument.hasFile)) {
+    return "送仓完成";
+  }
+
+  return detail.customerNote;
+}
+
+function getWarehouseDeliveryProgress(container: TableContainerRecord) {
+  const total = container.warehouseDetails.length;
+  const completed = container.warehouseDetails.filter((detail) =>
+    detail.appointments.some((appointment) => appointment.podDocument.hasFile),
+  ).length;
+
+  return {
+    total,
+    completed,
+    percent: total ? Math.round((completed / total) * 100) : 0,
+  };
+}
+
 function getMockContainerPayload({
   operationMode,
   search,
   dateField,
   dateFrom,
   dateTo,
+  warehouseDeliveryProgressFilter,
   pickupStatus,
   page,
   pageSize,
@@ -5597,6 +5786,7 @@ function getMockContainerPayload({
   dateField: DateFilterField;
   dateFrom: string;
   dateTo: string;
+  warehouseDeliveryProgressFilter: WarehouseDeliveryProgressFilter;
   pickupStatus: PickupStatus;
   page: number;
   pageSize: number;
@@ -5620,8 +5810,20 @@ function getMockContainerPayload({
     const dateValue = container[dateField];
     const matchesDateFrom = !dateFrom || Boolean(dateValue && dateValue >= dateFrom);
     const matchesDateTo = !dateTo || Boolean(dateValue && dateValue <= dateTo);
+    const progress = getWarehouseDeliveryProgress(container);
+    const matchesWarehouseDeliveryProgress =
+      warehouseDeliveryProgressFilter === "all" ||
+      (warehouseDeliveryProgressFilter === "complete"
+        ? progress.total > 0 && progress.percent === 100
+        : progress.percent < 100);
 
-    return matchesOperationMode && matchesSearch && matchesDateFrom && matchesDateTo;
+    return (
+      matchesOperationMode &&
+      matchesSearch &&
+      matchesDateFrom &&
+      matchesDateTo &&
+      matchesWarehouseDeliveryProgress
+    );
   });
   const filtered = baseFiltered.filter((container) => {
     if (pickupStatus === "pending") return !container.pickupDate;

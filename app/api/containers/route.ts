@@ -18,6 +18,7 @@ import {
   type EditableWarehouseDetailTextField,
   type EditableWarehouseAppointmentField,
   type PickupStatus,
+  type WarehouseDeliveryProgressStatus,
 } from "@/lib/container-data";
 
 export const dynamic = "force-dynamic";
@@ -34,6 +35,9 @@ export async function GET(request: NextRequest) {
   const dateField = parseDateField(searchParams.get("dateField"));
   const dateFrom = searchParams.get("dateFrom");
   const dateTo = searchParams.get("dateTo");
+  const warehouseDeliveryProgressStatus = parseWarehouseDeliveryProgressStatus(
+    searchParams.get("warehouseDeliveryProgress"),
+  );
   const pickupStatus = parsePickupStatus(searchParams.get("pickupStatus"));
   const page = Number(searchParams.get("page") ?? "1");
   const pageSize = Number(searchParams.get("pageSize") ?? "100");
@@ -47,6 +51,7 @@ export async function GET(request: NextRequest) {
       dateField,
       dateFrom,
       dateTo,
+      warehouseDeliveryProgressStatus,
       pickupStatus,
       page,
       pageSize,
@@ -130,6 +135,7 @@ export async function PATCH(request: NextRequest) {
         sourceOrderId: payload.sourceOrderId,
         sourceOrderDetailId: payload.sourceOrderDetailId,
         sourceAppointmentLineId: payload.sourceAppointmentLineId,
+        isCustomerVisible: payload.isCustomerVisible,
       });
 
       if (!updated) {
@@ -242,6 +248,13 @@ function parsePickupStatus(value: string | null): PickupStatus | null {
   return null;
 }
 
+function parseWarehouseDeliveryProgressStatus(
+  value: string | null,
+): WarehouseDeliveryProgressStatus | null {
+  if (value === "incomplete" || value === "complete") return value;
+  return null;
+}
+
 function parsePatchPayload(
   value: unknown,
 ):
@@ -284,7 +297,8 @@ function parsePatchPayload(
       kind: "warehouseAppointmentVisibility";
       sourceOrderId: string;
       sourceOrderDetailId: string;
-      sourceAppointmentLineId: string | null;
+      sourceAppointmentLineId: string;
+      isCustomerVisible: boolean;
     }
   | {
       kind: "containerText";
@@ -301,6 +315,7 @@ function parsePatchPayload(
     sourceOrderDetailId?: unknown;
     sourceAppointmentId?: unknown;
     sourceAppointmentLineId?: unknown;
+    isCustomerVisible?: unknown;
     field?: unknown;
     value?: unknown;
   };
@@ -380,24 +395,19 @@ function parsePatchPayload(
     if (
       typeof body.sourceOrderDetailId !== "string" ||
       !body.sourceOrderDetailId.trim() ||
-      !(
-        body.sourceAppointmentLineId === null ||
-        typeof body.sourceAppointmentLineId === "string"
-      )
+      typeof body.sourceAppointmentLineId !== "string" ||
+      !body.sourceAppointmentLineId.trim() ||
+      typeof body.isCustomerVisible !== "boolean"
     ) {
       return null;
     }
-
-    const sourceAppointmentLineId =
-      typeof body.sourceAppointmentLineId === "string"
-        ? body.sourceAppointmentLineId.trim()
-        : null;
 
     return {
       kind: "warehouseAppointmentVisibility",
       sourceOrderId: body.sourceOrderId.trim(),
       sourceOrderDetailId: body.sourceOrderDetailId.trim(),
-      sourceAppointmentLineId: sourceAppointmentLineId || null,
+      sourceAppointmentLineId: body.sourceAppointmentLineId.trim(),
+      isCustomerVisible: body.isCustomerVisible,
     };
   }
 

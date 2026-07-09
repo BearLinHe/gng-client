@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { readCustomerSession } from "@/lib/auth";
 import {
   getWarehouseAppointmentDocument,
+  recordWarehouseAppointmentDocumentDownload,
   saveWarehouseAppointmentDocument,
   type AppointmentDocumentType,
 } from "@/lib/container-data";
@@ -37,6 +38,13 @@ export async function GET(request: NextRequest) {
 
     if (!document) {
       return NextResponse.json({ error: "文件不存在" }, { status: 404 });
+    }
+
+    if (customer.role !== "admin") {
+      await recordWarehouseAppointmentDocumentDownload({
+        customerId: customer.id,
+        ...payload,
+      });
     }
 
     return new NextResponse(new Uint8Array(document.data), {

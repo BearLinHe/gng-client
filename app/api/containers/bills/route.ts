@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { readCustomerSession } from "@/lib/auth";
 import {
   getContainerBillDocument,
+  recordContainerBillDocumentDownload,
   saveContainerBillDocument,
 } from "@/lib/container-data";
 
@@ -31,6 +32,13 @@ export async function GET(request: NextRequest) {
 
     if (!document) {
       return NextResponse.json({ error: "账单不存在" }, { status: 404 });
+    }
+
+    if (customer.role !== "admin") {
+      await recordContainerBillDocumentDownload({
+        customerId: customer.id,
+        sourceOrderId,
+      });
     }
 
     return new NextResponse(new Uint8Array(document.data), {
