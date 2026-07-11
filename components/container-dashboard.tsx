@@ -68,6 +68,7 @@ type CustomerVisibilitySettings = {
   showEffectivePallets: boolean;
   showPod: boolean;
   showBol: boolean;
+  showSourceChangeNotifications: boolean;
 };
 
 type SyncRunStatus = {
@@ -118,7 +119,7 @@ type EditableWarehouseAppointmentField =
   | "effectivePallets";
 type EditableWarehouseDetailField = "actualPallets";
 type EditableContainerTextField = "extraChargeResponsibility";
-type EditableWarehouseDetailTextField = "customerNote";
+type EditableWarehouseDetailTextField = "customerNote" | "windowPeriod";
 type AppointmentDocumentType = "pod" | "bol";
 type PickupStatus = "all" | "pending" | "picked";
 type WarehouseDeliveryProgressFilter = "all" | "incomplete" | "complete";
@@ -148,6 +149,25 @@ type WarehouseDetail = {
   po: string | null;
   customerNote: string | null;
   appointments: WarehouseAppointment[];
+  sourceChangeEvents: SourceChangeEvent[];
+};
+
+type SourceChangeEvent = {
+  id: number;
+  sourceOrderDetailId: string;
+  sourceAppointmentLineId: string | null;
+  sourceAppointmentId: string | null;
+  warehousePoint: string | null;
+  fieldName: string;
+  fieldLabel: string;
+  oldValue: string | null;
+  newValue: string | null;
+  changeType: string;
+  createdAt: string | null;
+  adminAcknowledgedAt: string | null;
+  customerVisible: boolean;
+  customerReadAt: string | null;
+  isUnread: boolean;
 };
 
 type WarehouseAppointment = {
@@ -199,6 +219,7 @@ const defaultCustomerVisibilitySettings: CustomerVisibilitySettings = {
   showEffectivePallets: true,
   showPod: true,
   showBol: true,
+  showSourceChangeNotifications: true,
 };
 const customerVisibilityOptions: Array<{
   key: keyof CustomerVisibilitySettings;
@@ -209,6 +230,7 @@ const customerVisibilityOptions: Array<{
   { key: "showEffectivePallets", label: "有效板数" },
   { key: "showPod", label: "POD" },
   { key: "showBol", label: "BOL" },
+  { key: "showSourceChangeNotifications", label: "变动通知" },
 ];
 
 export default function ContainerDashboard() {
@@ -316,6 +338,12 @@ export default function ContainerDashboard() {
     () => new Set(),
   );
   const [containerBillErrors, setContainerBillErrors] = useState<
+    Record<string, string>
+  >({});
+  const [savingSourceChangeEvents, setSavingSourceChangeEvents] = useState<
+    Set<number>
+  >(() => new Set());
+  const [sourceChangeEventErrors, setSourceChangeEventErrors] = useState<
     Record<string, string>
   >({});
   const [editingWarehouseDetailCell, setEditingWarehouseDetailCell] = useState<{
@@ -2033,20 +2061,21 @@ export default function ContainerDashboard() {
     );
   }
 
-  async function commitWarehouseCustomerNote(
+  async function commitWarehouseDetailText(
     container: TableContainerRecord,
     warehouseDetail: WarehouseDetail,
+    field: EditableWarehouseDetailTextField,
     value: string,
   ) {
     const key = getWarehouseDetailTextKey(
       container.rowId,
       warehouseDetail.sourceOrderDetailId,
-      "customerNote",
+      field,
     );
     if (!isAdmin || savingTextCellKeysRef.current.has(key)) return;
 
     const nextValue = normalizeTextDraft(value);
-    if (nextValue === (warehouseDetail.customerNote ?? null)) return;
+    if (nextValue === (warehouseDetail[field] ?? null)) return;
 
     markTextCellSaving(key);
     setTextCellErrors((current) => {
@@ -2059,6 +2088,7 @@ export default function ContainerDashboard() {
       applyUpdatedWarehouseDetailText(
         container,
         warehouseDetail.sourceOrderDetailId,
+        field,
         nextValue,
       );
       clearTextCellSaving(key);
@@ -2073,14 +2103,14 @@ export default function ContainerDashboard() {
           kind: "warehouseDetailText",
           sourceOrderId: container.sourceOrderId,
           sourceOrderDetailId: warehouseDetail.sourceOrderDetailId,
-          field: "customerNote",
+          field,
           value: nextValue,
         }),
       });
       const payload = (await response.json()) as {
         warehouseDetailText?: Pick<
           WarehouseDetail,
-          "sourceOrderDetailId" | "customerNote"
+          "sourceOrderDetailId" | "customerNote" | "windowPeriod"
         >;
         error?: string;
       };
@@ -2092,7 +2122,8 @@ export default function ContainerDashboard() {
       applyUpdatedWarehouseDetailText(
         container,
         payload.warehouseDetailText.sourceOrderDetailId,
-        payload.warehouseDetailText.customerNote ?? null,
+        field,
+        payload.warehouseDetailText[field] ?? null,
       );
     } catch (saveError) {
       setTextCellErrors((current) => ({
@@ -2107,7 +2138,8 @@ export default function ContainerDashboard() {
   function applyUpdatedWarehouseDetailText(
     original: TableContainerRecord,
     sourceOrderDetailId: string,
-    customerNote: string | null,
+    field: EditableWarehouseDetailTextField,
+    value: string | null,
   ) {
     setContainers((current) =>
       current.map((row) =>
@@ -2118,7 +2150,7 @@ export default function ContainerDashboard() {
                 detail.sourceOrderDetailId === sourceOrderDetailId
                   ? {
                       ...detail,
-                      customerNote,
+                      [field]: value,
                     }
                   : detail,
               ),
@@ -2356,6 +2388,96 @@ export default function ContainerDashboard() {
     );
   }
 
+  async function handleSourceChangeEvents(
+    container: TableContainerRecord,
+    warehouseDetail: WarehouseDetail,
+    action: "notifyCustomer" | "acknowledge",
+  ) {
+    const eventIds = warehouseDetail.sourceChangeEvents.map((event) => event.id);
+    if (!eventIds.length) return;
+
+    const key = getSourceChangeEventGroupKey(
+      container.rowId,
+      warehouseDetail.sourceOrderDetailId,
+    );
+
+    setSavingSourceChangeEvents((current) => {
+      const next = new Set(current);
+      eventIds.forEach((eventId) => next.add(eventId));
+      return next;
+    });
+    setSourceChangeEventErrors((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+
+    try {
+      const response = await fetch("/api/containers/change-events", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, eventIds }),
+      });
+      const payload = (await response.json()) as {
+        eventIds?: number[];
+        error?: string;
+      };
+
+      if (!response.ok || !payload.eventIds) {
+        throw new Error(payload.error ?? "处理变动通知失败");
+      }
+
+      applyUpdatedSourceChangeEvents(
+        container,
+        warehouseDetail.sourceOrderDetailId,
+        payload.eventIds,
+      );
+    } catch (eventError) {
+      setSourceChangeEventErrors((current) => ({
+        ...current,
+        [key]:
+          eventError instanceof Error
+            ? eventError.message
+            : "处理变动通知失败",
+      }));
+    } finally {
+      setSavingSourceChangeEvents((current) => {
+        const next = new Set(current);
+        eventIds.forEach((eventId) => next.delete(eventId));
+        return next;
+      });
+    }
+  }
+
+  function applyUpdatedSourceChangeEvents(
+    original: TableContainerRecord,
+    sourceOrderDetailId: string,
+    eventIds: number[],
+  ) {
+    const updatedEventIds = new Set(eventIds);
+
+    setContainers((current) =>
+      current.map((row) =>
+        row.rowId === original.rowId
+          ? {
+              ...row,
+              warehouseDetails: row.warehouseDetails.map((detail) =>
+                detail.sourceOrderDetailId === sourceOrderDetailId
+                  ? {
+                      ...detail,
+                      sourceChangeEvents:
+                        detail.sourceChangeEvents.filter(
+                          (event) => !updatedEventIds.has(event.id),
+                        ),
+                    }
+                  : detail,
+              ),
+            }
+          : row,
+      ),
+    );
+  }
+
   const columns: ColumnDef<TableContainerRecord>[] = [
       {
         id: "rowDrag",
@@ -2399,6 +2521,7 @@ export default function ContainerDashboard() {
         enableResizing: false,
         cell: ({ row }) => {
           const isExpanded = expandedContainers.has(row.original.rowId);
+          const sourceChangeCount = getContainerSourceChangeCount(row.original);
 
           return (
             <div className="expandCell">
@@ -2414,6 +2537,10 @@ export default function ContainerDashboard() {
                   className={isExpanded ? "chevronIcon expanded" : "chevronIcon"}
                   size={15}
                   aria-hidden="true"
+                />
+                <SourceChangeDot
+                  count={sourceChangeCount}
+                  label={`${row.original.containerNumber} 有 ${sourceChangeCount} 条源数据变动`}
                 />
               </button>
             </div>
@@ -3680,6 +3807,12 @@ export default function ContainerDashboard() {
                                       expandedWarehouseDetails.has(detailKey);
                                     const noteDisplayValue =
                                       getWarehouseDetailNoteDisplayValue(detail);
+                                    const sourceChangeCount =
+                                      getWarehouseDetailSourceChangeCount(detail);
+                                    const sourceChangeSaving =
+                                      detail.sourceChangeEvents.some((event) =>
+                                        savingSourceChangeEvents.has(event.id),
+                                      );
 
                                     return (
                                       <section
@@ -3719,21 +3852,48 @@ export default function ContainerDashboard() {
                                             />
                                           </button>
                                           <div className="warehousePointCell">
+                                            <SourceChangeDot
+                                              count={sourceChangeCount}
+                                              label={`${detail.warehousePoint} 有 ${sourceChangeCount} 条源数据变动`}
+                                            />
                                             <TruncatedText
                                               text={detail.warehousePoint}
                                               className="warehousePointText"
                                             />
                                           </div>
                                           <div className="warehouseWindowCell">
-                                            <TruncatedText
-                                              text={valueOrDash(
+                                            <InlineEditableTextCell
+                                              error={
+                                                textCellErrors[
+                                                  getWarehouseDetailTextKey(
+                                                    container.rowId,
+                                                    detail.sourceOrderDetailId,
+                                                    "windowPeriod",
+                                                  )
+                                                ]
+                                              }
+                                              isSaving={savingTextCells.has(
+                                                getWarehouseDetailTextKey(
+                                                  container.rowId,
+                                                  detail.sourceOrderDetailId,
+                                                  "windowPeriod",
+                                                ),
+                                              )}
+                                              label={`${detail.warehousePoint} 窗口期`}
+                                              onCommit={(value) =>
+                                                commitWarehouseDetailText(
+                                                  container,
+                                                  detail,
+                                                  "windowPeriod",
+                                                  value,
+                                                )
+                                              }
+                                              placeholder="添加窗口期"
+                                              readOnly={!isAdmin}
+                                              value={valueOrDash(
                                                 detail.windowPeriod,
                                               )}
-                                              className={
-                                                detail.windowPeriod
-                                                  ? "warehouseWindowText"
-                                                  : "warehouseWindowText emptyText"
-                                              }
+                                              editValue={detail.windowPeriod}
                                             />
                                           </div>
                                           <div className="warehouseNoteCell">
@@ -3757,9 +3917,10 @@ export default function ContainerDashboard() {
                                               label={`${detail.warehousePoint} 仓点备注`}
                                               editValue={detail.customerNote}
                                               onCommit={(value) =>
-                                                commitWarehouseCustomerNote(
+                                                commitWarehouseDetailText(
                                                   container,
                                                   detail,
+                                                  "customerNote",
                                                   value,
                                                 )
                                               }
@@ -3824,6 +3985,35 @@ export default function ContainerDashboard() {
                                         </div>
                                         {isDetailExpanded ? (
                                           <div className="warehouseAppointmentPanel">
+                                            {detail.sourceChangeEvents.length ? (
+                                              <SourceChangeEventsPanel
+                                                detail={detail}
+                                                error={
+                                                  sourceChangeEventErrors[
+                                                    getSourceChangeEventGroupKey(
+                                                      container.rowId,
+                                                      detail.sourceOrderDetailId,
+                                                    )
+                                                  ]
+                                                }
+                                                isAdmin={isAdmin}
+                                                isSaving={sourceChangeSaving}
+                                                onAcknowledge={() =>
+                                                  handleSourceChangeEvents(
+                                                    container,
+                                                    detail,
+                                                    "acknowledge",
+                                                  )
+                                                }
+                                                onNotifyCustomer={() =>
+                                                  handleSourceChangeEvents(
+                                                    container,
+                                                    detail,
+                                                    "notifyCustomer",
+                                                  )
+                                                }
+                                              />
+                                            ) : null}
                                             <div className="appointmentTitle">
                                               送仓预约
                                             </div>
@@ -5006,6 +5196,71 @@ function InlineEditableTextCell({
   );
 }
 
+function SourceChangeDot({ count, label }: { count: number; label: string }) {
+  if (!count) return null;
+
+  return (
+    <span className="sourceChangeDot" title={label} aria-label={label}>
+      {count > 9 ? "9+" : count}
+    </span>
+  );
+}
+
+function SourceChangeEventsPanel({
+  detail,
+  error,
+  isAdmin,
+  isSaving,
+  onAcknowledge,
+  onNotifyCustomer,
+}: {
+  detail: WarehouseDetail;
+  error?: string;
+  isAdmin: boolean;
+  isSaving: boolean;
+  onAcknowledge: () => void;
+  onNotifyCustomer: () => void;
+}) {
+  return (
+    <div className="sourceChangePanel">
+      <div className="sourceChangePanelHeader">
+        <div>
+          <strong>源数据变动</strong>
+          <span>{detail.sourceChangeEvents.length} 条待处理变动</span>
+        </div>
+        {isAdmin ? (
+          <div className="sourceChangeActions">
+            <button type="button" disabled={isSaving} onClick={onNotifyCustomer}>
+              通知客户
+            </button>
+            <button type="button" disabled={isSaving} onClick={onAcknowledge}>
+              标记已处理
+            </button>
+          </div>
+        ) : null}
+      </div>
+      <div className="sourceChangeList">
+        {detail.sourceChangeEvents.map((event) => (
+          <div className="sourceChangeItem" key={event.id}>
+            <span className="sourceChangeField">{event.fieldLabel}</span>
+            <span className="sourceChangeValue old">
+              {valueOrDash(event.oldValue)}
+            </span>
+            <span className="sourceChangeArrow">→</span>
+            <span className="sourceChangeValue new">
+              {valueOrDash(event.newValue)}
+            </span>
+            <span className="sourceChangeTime">
+              {formatCompactDateTime(event.createdAt)}
+            </span>
+          </div>
+        ))}
+      </div>
+      {error ? <div className="sourceChangeError">{error}</div> : null}
+    </div>
+  );
+}
+
 function SortIcon({
   sortDirection,
 }: {
@@ -5301,6 +5556,20 @@ function formatSyncTime(value: string | null) {
   }).format(date);
 }
 
+function formatCompactDateTime(value: string | null) {
+  if (!value) return "时间未知";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "时间未知";
+
+  return new Intl.DateTimeFormat("zh-CN", {
+    day: "2-digit",
+    hour: "2-digit",
+    hour12: false,
+    minute: "2-digit",
+    month: "2-digit",
+  }).format(date);
+}
+
 function formatPercentValue(value: string | null | undefined) {
   const displayValue = valueOrDash(value);
   if (displayValue === "—") return displayValue;
@@ -5436,6 +5705,13 @@ function getWarehouseDetailTextKey(
   return `${rowId}:${sourceOrderDetailId}:${field}`;
 }
 
+function getSourceChangeEventGroupKey(
+  rowId: string,
+  sourceOrderDetailId: string,
+) {
+  return `${rowId}:${sourceOrderDetailId}:source-change-events`;
+}
+
 function getContainerBillKey(rowId: string) {
   return `${rowId}:bill`;
 }
@@ -5445,6 +5721,17 @@ function getAppointmentSourceDetailId(
   warehouseDetail: WarehouseDetail,
 ) {
   return appointment.sourceOrderDetailId || warehouseDetail.sourceOrderDetailId;
+}
+
+function getContainerSourceChangeCount(container: TableContainerRecord) {
+  return container.warehouseDetails.reduce(
+    (total, detail) => total + getWarehouseDetailSourceChangeCount(detail),
+    0,
+  );
+}
+
+function getWarehouseDetailSourceChangeCount(detail: WarehouseDetail) {
+  return detail.sourceChangeEvents.filter((event) => event.isUnread).length;
 }
 
 function getAppointmentDocumentUrl({
@@ -6122,6 +6409,7 @@ function createMockWarehouseDetail(
       estimatedPallets % 4 === 0
         ? "窗口期较紧，请客户提前准备收货信息。"
         : null,
+    sourceChangeEvents: [],
     appointments: appointments.map((appointment) => ({
       ...appointment,
       isCustomerVisible: appointment.isCustomerVisible ?? false,

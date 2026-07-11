@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { readCustomerSession } from "@/lib/auth";
+import { getCustomerVisibilitySettings } from "@/lib/customer-settings";
 import {
   updateAppointmentDetail,
   updateContainerDate,
@@ -43,9 +44,19 @@ export async function GET(request: NextRequest) {
   const pageSize = Number(searchParams.get("pageSize") ?? "100");
 
   try {
+    const settings =
+      customer.role === "admin"
+        ? null
+        : await getCustomerVisibilitySettings(customer.id);
     const result = await getContainers({
       customerId: customer.id,
       showAllWarehouseAppointments: customer.role === "admin",
+      sourceChangeEventView:
+        customer.role === "admin"
+          ? "admin"
+          : settings?.showSourceChangeNotifications
+            ? "customer"
+            : "none",
       operationMode,
       search,
       dateField,
@@ -461,7 +472,7 @@ function isEditableWarehouseDetailField(
 function isEditableWarehouseDetailTextField(
   value: unknown,
 ): value is EditableWarehouseDetailTextField {
-  return value === "customerNote";
+  return value === "customerNote" || value === "windowPeriod";
 }
 
 function isEditableContainerTextField(

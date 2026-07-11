@@ -6,6 +6,7 @@ export type CustomerVisibilitySettings = {
   showEffectivePallets: boolean;
   showPod: boolean;
   showBol: boolean;
+  showSourceChangeNotifications: boolean;
 };
 
 type CustomerVisibilitySettingsRow = {
@@ -14,6 +15,7 @@ type CustomerVisibilitySettingsRow = {
   showEffectivePallets: boolean | null;
   showPod: boolean | null;
   showBol: boolean | null;
+  showSourceChangeNotifications: boolean | null;
 };
 
 export const defaultCustomerVisibilitySettings: CustomerVisibilitySettings = {
@@ -22,11 +24,30 @@ export const defaultCustomerVisibilitySettings: CustomerVisibilitySettings = {
   showEffectivePallets: true,
   showPod: true,
   showBol: true,
+  showSourceChangeNotifications: true,
 };
+
+let customerSettingsSchemaPromise: Promise<void> | null = null;
+
+async function ensureCustomerSettingsSchema() {
+  customerSettingsSchemaPromise ??= withAppTransaction(async (client) => {
+    await client.query(`
+      alter table public.portal_customers
+        add column if not exists show_source_change_notifications boolean not null default true;
+    `);
+  }).catch((error) => {
+    customerSettingsSchemaPromise = null;
+    throw error;
+  });
+
+  return customerSettingsSchemaPromise;
+}
 
 export async function getCustomerVisibilitySettings(
   customerId: string,
 ): Promise<CustomerVisibilitySettings | null> {
+  await ensureCustomerSettingsSchema();
+
   return withAppReadOnlyTransaction(async (client) => {
     const result = await client.query<CustomerVisibilitySettingsRow>(
       `
@@ -35,7 +56,8 @@ export async function getCustomerVisibilitySettings(
           show_delivery_date as "showDeliveryDate",
           show_effective_pallets as "showEffectivePallets",
           show_pod as "showPod",
-          show_bol as "showBol"
+          show_bol as "showBol",
+          show_source_change_notifications as "showSourceChangeNotifications"
         from public.portal_customers
         where source_customer_id = $1
           and source_active = true
@@ -55,6 +77,8 @@ export async function updateCustomerVisibilitySettings({
   customerId: string;
   settings: CustomerVisibilitySettings;
 }): Promise<CustomerVisibilitySettings | null> {
+  await ensureCustomerSettingsSchema();
+
   return withAppTransaction(async (client) => {
     const result = await client.query<CustomerVisibilitySettingsRow>(
       `
@@ -65,6 +89,7 @@ export async function updateCustomerVisibilitySettings({
           show_effective_pallets = $4,
           show_pod = $5,
           show_bol = $6,
+          show_source_change_notifications = $7,
           updated_at = now()
         where source_customer_id = $1
           and source_active = true
@@ -73,7 +98,8 @@ export async function updateCustomerVisibilitySettings({
           show_delivery_date as "showDeliveryDate",
           show_effective_pallets as "showEffectivePallets",
           show_pod as "showPod",
-          show_bol as "showBol"
+          show_bol as "showBol",
+          show_source_change_notifications as "showSourceChangeNotifications"
       `,
       [
         customerId,
@@ -82,6 +108,7 @@ export async function updateCustomerVisibilitySettings({
         settings.showEffectivePallets,
         settings.showPod,
         settings.showBol,
+        settings.showSourceChangeNotifications,
       ],
     );
 
@@ -105,5 +132,8 @@ export function normalizeSettings(
       defaultCustomerVisibilitySettings.showEffectivePallets,
     showPod: settings.showPod ?? defaultCustomerVisibilitySettings.showPod,
     showBol: settings.showBol ?? defaultCustomerVisibilitySettings.showBol,
+    showSourceChangeNotifications:
+      settings.showSourceChangeNotifications ??
+      defaultCustomerVisibilitySettings.showSourceChangeNotifications,
   };
 }

@@ -57,6 +57,25 @@ export type WarehouseDetail = {
   po: string | null;
   customerNote: string | null;
   appointments: WarehouseAppointment[];
+  sourceChangeEvents: SourceChangeEvent[];
+};
+
+export type SourceChangeEvent = {
+  id: number;
+  sourceOrderDetailId: string;
+  sourceAppointmentLineId: string | null;
+  sourceAppointmentId: string | null;
+  warehousePoint: string | null;
+  fieldName: string;
+  fieldLabel: string;
+  oldValue: string | null;
+  newValue: string | null;
+  changeType: string;
+  createdAt: string | null;
+  adminAcknowledgedAt: string | null;
+  customerVisible: boolean;
+  customerReadAt: string | null;
+  isUnread: boolean;
 };
 
 export type WarehouseAppointment = {
@@ -113,7 +132,7 @@ export type EditableWarehouseAppointmentField =
   | "effectivePallets";
 export type EditableWarehouseDetailField = "actualPallets";
 export type EditableContainerTextField = "extraChargeResponsibility";
-export type EditableWarehouseDetailTextField = "customerNote";
+export type EditableWarehouseDetailTextField = "customerNote" | "windowPeriod";
 export type PickupStatus = "pending" | "picked";
 export type WarehouseDeliveryProgressStatus = "incomplete" | "complete";
 
@@ -162,6 +181,25 @@ type WarehouseDetailRow = {
   po: string | null;
   customerNote: string | null;
   appointments: WarehouseAppointmentRow[] | null;
+  sourceChangeEvents?: SourceChangeEventRow[] | null;
+};
+
+type SourceChangeEventRow = {
+  id: string | number;
+  sourceOrderDetailId: string | null;
+  sourceAppointmentLineId: string | null;
+  sourceAppointmentId: string | null;
+  warehousePoint: string | null;
+  fieldName: string | null;
+  fieldLabel: string | null;
+  oldValue: string | null;
+  newValue: string | null;
+  changeType: string | null;
+  createdAt: Date | string | null;
+  adminAcknowledgedAt: Date | string | null;
+  customerVisible: boolean | null;
+  customerReadAt: Date | string | null;
+  isUnread: boolean | null;
 };
 
 type WarehouseAppointmentRow = {
@@ -350,28 +388,20 @@ function appointmentVisibilitySql({
   detailAlias: string;
   defaultAppointmentAlias: string;
 }) {
+  const visibleColumn = `${detailAlias}.customer_visible_appointment_line_id`;
   const visibleAppointmentLineIds = visibleAppointmentLineIdsSql(detailAlias);
   const pickupDateColumn = appDateFilterColumns.pickupDate;
   const defaultDeliveryDateColumn = `case when ${defaultAppointmentAlias}.manual_delivery_date_override then ${defaultAppointmentAlias}.manual_delivery_date else ${defaultAppointmentAlias}.source_delivery_date end`;
-  const selectedExistsSql = `
-    exists (
-      select 1
-      from public.portal_warehouse_appointments pwa_selected
-      where pwa_selected.source_order_id = ${detailAlias}.source_order_id
-        and pwa_selected.source_order_detail_id = ${detailAlias}.source_order_detail_id
-        and pwa_selected.source_appointment_line_id = any(${visibleAppointmentLineIds})
-        and pwa_selected.source_active = true
-    )
-  `;
+  const hasManualVisibilitySql = `(${visibleColumn} is not null and btrim(${visibleColumn}) <> '')`;
 
   return `
     and (
       (
-        ${selectedExistsSql}
+        ${hasManualVisibilitySql}
         and ${appointmentAlias}.source_appointment_line_id = any(${visibleAppointmentLineIds})
       )
       or (
-        not ${selectedExistsSql}
+        not ${hasManualVisibilitySql}
         and ${appointmentAlias}.source_appointment_line_id = (
           select ${defaultAppointmentAlias}.source_appointment_line_id
           from public.portal_warehouse_appointments ${defaultAppointmentAlias}
@@ -424,8 +454,6 @@ function serializeVisibleAppointmentLineIds(values: string[]) {
     new Set(values.map((value) => value.trim()).filter(Boolean)),
   );
 
-  if (!uniqueValues.length) return null;
-  if (uniqueValues.length === 1) return uniqueValues[0];
   return JSON.stringify(uniqueValues);
 }
 
@@ -490,7 +518,18 @@ const appWarehouseDetailColumns: Record<EditableWarehouseDetailField, string> =
       "case when pwd.manual_actual_pallets_override then pwd.manual_actual_pallets else pwd.source_actual_pallets end",
   };
 
+const appWarehouseDetailTextColumns: Record<
+  EditableWarehouseDetailTextField,
+  string
+> = {
+  customerNote: "pwd.manual_customer_note",
+  windowPeriod:
+    "case when pwd.manual_window_period_override then pwd.manual_window_period else pwd.source_window_period end",
+};
+
 let documentTrackingSchemaPromise: Promise<void> | null = null;
+let warehouseDetailTextSchemaPromise: Promise<void> | null = null;
+let sourceChangeEventsSchemaPromise: Promise<void> | null = null;
 
 async function ensureDocumentTrackingSchema() {
   documentTrackingSchemaPromise ??= withAppTransaction(async (client) => {
@@ -511,6 +550,70 @@ async function ensureDocumentTrackingSchema() {
   });
 
   return documentTrackingSchemaPromise;
+}
+
+async function ensureWarehouseDetailTextSchema() {
+  warehouseDetailTextSchemaPromise ??= withAppTransaction(async (client) => {
+    await client.query(`
+      alter table public.portal_warehouse_details
+        add column if not exists manual_window_period text,
+        add column if not exists manual_window_period_override boolean not null default false;
+    `);
+  }).catch((error) => {
+    warehouseDetailTextSchemaPromise = null;
+    throw error;
+  });
+
+  return warehouseDetailTextSchemaPromise;
+}
+
+async function ensureSourceChangeEventsSchema() {
+  sourceChangeEventsSchemaPromise ??= withAppTransaction(async (client) => {
+    await client.query(`
+      create table if not exists public.portal_source_change_events (
+        id bigserial primary key,
+        source_order_id text not null references public.portal_containers(source_order_id) on delete cascade,
+        source_order_detail_id text not null,
+        source_appointment_line_id text,
+        source_appointment_id text,
+        warehouse_point text,
+        field_name text not null,
+        field_label text not null,
+        old_value text,
+        new_value text,
+        change_type text not null,
+        customer_visible boolean not null default false,
+        admin_acknowledged_at timestamptz,
+        customer_read_at timestamptz,
+        created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now()
+      );
+      create index if not exists portal_source_change_events_order_idx
+        on public.portal_source_change_events(source_order_id);
+      create index if not exists portal_source_change_events_detail_idx
+        on public.portal_source_change_events(source_order_detail_id);
+      create index if not exists portal_source_change_events_admin_unread_idx
+        on public.portal_source_change_events(source_order_id)
+        where admin_acknowledged_at is null;
+      create index if not exists portal_source_change_events_customer_unread_idx
+        on public.portal_source_change_events(source_order_id)
+        where customer_visible = true and customer_read_at is null;
+      create unique index if not exists portal_source_change_events_unique_idx
+        on public.portal_source_change_events(
+          source_order_id,
+          source_order_detail_id,
+          coalesce(source_appointment_line_id, ''),
+          field_name,
+          coalesce(old_value, ''),
+          coalesce(new_value, '')
+        );
+    `);
+  }).catch((error) => {
+    sourceChangeEventsSchemaPromise = null;
+    throw error;
+  });
+
+  return sourceChangeEventsSchemaPromise;
 }
 
 const editableWarehouseDetailColumns: Record<
@@ -701,6 +804,7 @@ export async function getContainers({
   dateTo,
   warehouseDeliveryProgressStatus,
   pickupStatus,
+  sourceChangeEventView = "none",
   page = 1,
   pageSize = 100,
 }: {
@@ -713,10 +817,13 @@ export async function getContainers({
   dateTo?: string | null;
   warehouseDeliveryProgressStatus?: WarehouseDeliveryProgressStatus | null;
   pickupStatus?: PickupStatus | null;
+  sourceChangeEventView?: "admin" | "customer" | "none";
   page?: number;
   pageSize?: number;
 }): Promise<ContainerQueryResult> {
   await ensureDocumentTrackingSchema();
+  await ensureWarehouseDetailTextSchema();
+  await ensureSourceChangeEventsSchema();
 
   const params: string[] = [];
   const baseFilters: string[] = ["pc.source_active = true"];
@@ -747,6 +854,52 @@ export async function getContainers({
       });
   const detailVisibleAppointmentLineIds =
     visibleAppointmentLineIdsSql("pwd");
+  const sourceChangeEventsJoin =
+    sourceChangeEventView === "none"
+      ? `
+        left join lateral (
+          select '[]'::jsonb as change_events
+        ) source_change_events on true
+      `
+      : `
+        left join lateral (
+          select coalesce(
+            jsonb_agg(
+              jsonb_build_object(
+                'id', sce.id,
+                'sourceOrderDetailId', sce.source_order_detail_id,
+                'sourceAppointmentLineId', sce.source_appointment_line_id,
+                'sourceAppointmentId', sce.source_appointment_id,
+                'warehousePoint', sce.warehouse_point,
+                'fieldName', sce.field_name,
+                'fieldLabel', sce.field_label,
+                'oldValue', sce.old_value,
+                'newValue', sce.new_value,
+                'changeType', sce.change_type,
+                'createdAt', sce.created_at,
+                'adminAcknowledgedAt', sce.admin_acknowledged_at,
+                'customerVisible', sce.customer_visible,
+                'customerReadAt', sce.customer_read_at,
+                'isUnread', ${
+                  sourceChangeEventView === "admin"
+                    ? "sce.admin_acknowledged_at is null"
+                    : "sce.customer_read_at is null"
+                }
+              )
+              order by sce.created_at desc, sce.id desc
+            ),
+            '[]'::jsonb
+          ) as change_events
+          from public.portal_source_change_events sce
+          where sce.source_order_id = pwd.source_order_id
+            and sce.source_order_detail_id = pwd.source_order_detail_id
+            and ${
+              sourceChangeEventView === "admin"
+                ? "sce.admin_acknowledged_at is null"
+                : "sce.customer_visible = true"
+            }
+        ) source_change_events on true
+      `;
 
   if (customerId) {
     params.push(customerId);
@@ -910,7 +1063,7 @@ export async function getContainers({
               'sourceOrderDetailId', pwd.source_order_detail_id,
               'deliveryNature', pwd.source_delivery_nature,
               'warehousePoint', pwd.source_warehouse_point,
-              'windowPeriod', pwd.source_window_period,
+              'windowPeriod', ${appWarehouseDetailTextColumns.windowPeriod},
               'volume', pwd.source_volume,
               'estimatedPallets', pwd.source_estimated_pallets,
               'volumePercentage', pwd.source_volume_percentage,
@@ -922,7 +1075,8 @@ export async function getContainers({
               'notes', pwd.source_notes,
               'po', pwd.source_po,
               'customerNote', pwd.manual_customer_note,
-              'appointments', coalesce(warehouse_appointments.appointments, '[]'::jsonb)
+              'appointments', coalesce(warehouse_appointments.appointments, '[]'::jsonb),
+              'sourceChangeEvents', coalesce(source_change_events.change_events, '[]'::jsonb)
             )
             order by
               pwd.source_warehouse_point asc nulls last,
@@ -953,6 +1107,7 @@ export async function getContainers({
               and pwa.source_active = true
               ${appointmentVisibilityFilter}
           ) warehouse_appointments on true
+          ${sourceChangeEventsJoin}
           where pwd.source_order_id = pc.source_order_id
             and pwd.source_active = true
         ) warehouse_detail_points on true
@@ -1221,15 +1376,33 @@ export async function updateWarehouseDetailText({
   sourceOrderDetailId: string;
   field: EditableWarehouseDetailTextField;
   value: string | null;
-}): Promise<Pick<WarehouseDetail, "sourceOrderDetailId" | "customerNote"> | null> {
-  if (field !== "customerNote") return null;
+}): Promise<
+  Pick<WarehouseDetail, "sourceOrderDetailId" | "customerNote" | "windowPeriod"> | null
+> {
   const normalizedValue = normalizeTextValue(value);
+  const updateConfig =
+    field === "customerNote"
+      ? {
+          valueColumn: "manual_customer_note",
+          overrideColumn: null,
+        }
+      : field === "windowPeriod"
+        ? {
+            valueColumn: "manual_window_period",
+            overrideColumn: "manual_window_period_override",
+          }
+        : null;
+
+  if (!updateConfig) return null;
+
   const sourceOrderDetailIds = sourceOrderDetailId
     .split(",")
     .map((id) => id.trim())
     .filter(Boolean);
 
   if (!sourceOrderDetailIds.length) return null;
+
+  await ensureWarehouseDetailTextSchema();
 
   return withAppTransaction(async (client) => {
     let updatedRows = 0;
@@ -1238,7 +1411,12 @@ export async function updateWarehouseDetailText({
       const result = await client.query(
         `
           update public.portal_warehouse_details pwd
-          set manual_customer_note = $4,
+          set ${updateConfig.valueColumn} = $4,
+              ${
+                updateConfig.overrideColumn
+                  ? `${updateConfig.overrideColumn} = true,`
+                  : ""
+              }
               updated_at = now()
           from public.portal_containers pc
           where pwd.source_order_id = pc.source_order_id
@@ -1257,7 +1435,8 @@ export async function updateWarehouseDetailText({
 
     return {
       sourceOrderDetailId,
-      customerNote: normalizedValue,
+      customerNote: field === "customerNote" ? normalizedValue : null,
+      windowPeriod: field === "windowPeriod" ? normalizedValue : null,
     };
   });
 }
@@ -1417,6 +1596,41 @@ export async function updateWarehouseAppointmentVisibility({
         updated.customerVisibleAppointmentLineId,
       ),
     };
+  });
+}
+
+export async function acknowledgeSourceChangeEvents({
+  customerId,
+  eventIds,
+  notifyCustomer,
+}: {
+  customerId: string;
+  eventIds: number[];
+  notifyCustomer: boolean;
+}): Promise<number[]> {
+  const safeEventIds = normalizeEventIds(eventIds);
+  if (!safeEventIds.length) return [];
+
+  await ensureSourceChangeEventsSchema();
+
+  return withAppTransaction(async (client) => {
+    const result = await client.query<{ id: string | number }>(
+      `
+        update public.portal_source_change_events sce
+        set admin_acknowledged_at = now(),
+            customer_visible = case when $3 then true else customer_visible end,
+            updated_at = now()
+        from public.portal_containers pc
+        where pc.source_order_id = sce.source_order_id
+          and pc.source_customer_id = $1
+          and pc.source_active = true
+          and sce.id = any($2::bigint[])
+        returning sce.id
+      `,
+      [customerId, safeEventIds, notifyCustomer],
+    );
+
+    return rows(result).map((row) => Number(row.id));
   });
 }
 
@@ -2070,6 +2284,29 @@ function toWarehouseDetail(detail: WarehouseDetailRow): WarehouseDetail {
     po: detail.po,
     customerNote: detail.customerNote,
     appointments: (detail.appointments ?? []).map(toWarehouseAppointment),
+    sourceChangeEvents: (detail.sourceChangeEvents ?? []).map(
+      toSourceChangeEvent,
+    ),
+  };
+}
+
+function toSourceChangeEvent(event: SourceChangeEventRow): SourceChangeEvent {
+  return {
+    id: Number(event.id),
+    sourceOrderDetailId: event.sourceOrderDetailId ?? "",
+    sourceAppointmentLineId: event.sourceAppointmentLineId,
+    sourceAppointmentId: event.sourceAppointmentId,
+    warehousePoint: event.warehousePoint,
+    fieldName: event.fieldName ?? "",
+    fieldLabel: event.fieldLabel ?? "变动",
+    oldValue: event.oldValue,
+    newValue: event.newValue,
+    changeType: event.changeType ?? "updated",
+    createdAt: formatDateTime(event.createdAt),
+    adminAcknowledgedAt: formatDateTime(event.adminAcknowledgedAt),
+    customerVisible: Boolean(event.customerVisible),
+    customerReadAt: formatDateTime(event.customerReadAt),
+    isUnread: Boolean(event.isUnread),
   };
 }
 
@@ -2214,6 +2451,7 @@ function buildWarehouseDetails(
         notes: null,
         po: null,
         customerNote: null,
+        sourceChangeEvents: [],
         appointments: [
           attachAppointmentDocuments(
             `legacy:${appointment.sourceAppointmentId}`,
@@ -2243,13 +2481,17 @@ function buildWarehouseDetails(
     const hasManualSelection = sortedAppointments.some(
       (appointment) => appointment.isCustomerVisible,
     );
+    const displayedAppointments =
+      showAllWarehouseAppointments || hasManualSelection
+        ? sortedAppointments
+        : pickDefaultWarehouseAppointments(sortedAppointments, pickupDate);
 
     return {
       ...detail,
-      appointments:
-        showAllWarehouseAppointments || hasManualSelection
-          ? sortedAppointments
-          : pickDefaultWarehouseAppointments(sortedAppointments, pickupDate),
+      windowPeriod:
+        normalizeOptionalText(detail.windowPeriod) ??
+        getDefaultWindowPeriod(sortedAppointments, pickupDate),
+      appointments: displayedAppointments,
     };
   });
 }
@@ -2313,6 +2555,10 @@ function mergeWarehouseDetails(
     notes: mergeText(current.notes, next.notes),
     po: mergeText(current.po, next.po),
     customerNote: mergeText(current.customerNote, next.customerNote),
+    sourceChangeEvents: [
+      ...current.sourceChangeEvents,
+      ...next.sourceChangeEvents,
+    ],
     appointments: [...current.appointments, ...next.appointments],
   };
 }
@@ -2403,6 +2649,44 @@ function pickDefaultWarehouseAppointments(
       );
     })[0],
   ];
+}
+
+function getDefaultWindowPeriod(
+  appointments: WarehouseAppointment[],
+  pickupDate: string | null,
+) {
+  const visibleAppointments = appointments.filter(
+    (appointment) => appointment.isCustomerVisible,
+  );
+  const selectedAppointment = visibleAppointments.length
+    ? [...visibleAppointments].sort(compareWarehouseAppointments)[0]
+    : pickDefaultWarehouseAppointments(appointments, pickupDate)[0];
+
+  return getDeliveryWeekWindowPeriod(selectedAppointment?.deliveryDate);
+}
+
+function getDeliveryWeekWindowPeriod(deliveryDate: string | null | undefined) {
+  if (!deliveryDate) return null;
+
+  const deliveryTime = Date.parse(`${deliveryDate}T00:00:00Z`);
+  if (Number.isNaN(deliveryTime)) return null;
+
+  const startDate = new Date(deliveryTime);
+  startDate.setUTCDate(startDate.getUTCDate() - startDate.getUTCDay());
+
+  const endDate = new Date(startDate);
+  endDate.setUTCDate(startDate.getUTCDate() + 6);
+
+  return `${formatMonthDay(startDate)}-${formatMonthDay(endDate)}`;
+}
+
+function formatMonthDay(date: Date) {
+  return `${date.getUTCMonth() + 1}/${date.getUTCDate()}`;
+}
+
+function normalizeOptionalText(value: string | null | undefined) {
+  const trimmedValue = value?.trim();
+  return trimmedValue ? trimmedValue : null;
 }
 
 function getDateDistanceDays(
@@ -2595,6 +2879,16 @@ function normalizeTextValue(value: string | null | undefined): string | null {
   const normalized = value?.trim() ?? "";
   if (!normalized) return null;
   return normalized.slice(0, 2000);
+}
+
+function normalizeEventIds(eventIds: number[]) {
+  return Array.from(
+    new Set(
+      eventIds
+        .map((eventId) => Math.trunc(Number(eventId)))
+        .filter((eventId) => Number.isSafeInteger(eventId) && eventId > 0),
+    ),
+  );
 }
 
 function formatDateTime(value: Date | string | null): string | null {

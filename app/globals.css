@@ -1391,6 +1391,7 @@ th[aria-sort="descending"] .sortIndicator {
 }
 
 .tableIconButton {
+  position: relative;
   width: 28px;
   height: 28px;
   border: 0;
@@ -1927,8 +1928,154 @@ body.rowDragActive * {
   min-width: 0;
 }
 
+.warehousePointCell {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
 .warehousePointText {
   font-weight: 750;
+}
+
+.sourceChangeDot {
+  min-width: 17px;
+  height: 17px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border: 2px solid #ffffff;
+  border-radius: 999px;
+  background: #dc2626;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+  box-shadow: 0 1px 3px rgba(148, 27, 27, 0.24);
+}
+
+.tableIconButton .sourceChangeDot {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+}
+
+.sourceChangePanel {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #fecaca;
+  border-radius: 9px;
+  background: #fffafa;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+}
+
+.sourceChangePanelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sourceChangePanelHeader > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.sourceChangePanelHeader strong {
+  color: #991b1b;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.sourceChangePanelHeader span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.sourceChangeActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.sourceChangeActions button {
+  min-height: 30px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #991b1b;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 850;
+  padding: 0 10px;
+}
+
+.sourceChangeActions button:hover:not(:disabled) {
+  background: #fff1f2;
+}
+
+.sourceChangeActions button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.sourceChangeList {
+  display: grid;
+  gap: 6px;
+}
+
+.sourceChangeItem {
+  display: grid;
+  grid-template-columns: minmax(76px, 0.7fr) minmax(120px, 1fr) 18px minmax(120px, 1fr) minmax(96px, max-content);
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #fee2e2;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 750;
+  padding: 7px 9px;
+}
+
+.sourceChangeField {
+  color: #991b1b;
+  font-weight: 900;
+}
+
+.sourceChangeValue {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourceChangeValue.old {
+  color: #64748b;
+}
+
+.sourceChangeValue.new {
+  color: #172033;
+}
+
+.sourceChangeArrow,
+.sourceChangeTime {
+  color: #94a3b8;
+}
+
+.sourceChangeTime {
+  justify-self: end;
+  white-space: nowrap;
+}
+
+.sourceChangeError {
+  color: #b42318;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .warehouseWindowText {

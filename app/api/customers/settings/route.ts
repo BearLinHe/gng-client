@@ -84,6 +84,7 @@ function parseSettings(value: unknown): CustomerVisibilitySettings | null {
     "showEffectivePallets",
     "showPod",
     "showBol",
+    "showSourceChangeNotifications",
   ];
 
   for (const key of keys) {
