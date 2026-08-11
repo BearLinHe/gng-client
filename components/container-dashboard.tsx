@@ -2728,7 +2728,12 @@ export default function ContainerDashboard() {
         minSize: 200,
         maxSize: 320,
         cell: ({ row }) => (
-          <LocationCell value={getLocationText(row.original)} />
+          <LocationCell
+            value={getLocationText(row.original)}
+            transferDetails={row.original.warehouseDetails.filter(
+              isTransferWarehouseDetail,
+            )}
+          />
         ),
       },
       {
@@ -3856,8 +3861,17 @@ export default function ContainerDashboard() {
                                               count={sourceChangeCount}
                                               label={`${detail.warehousePoint} 有 ${sourceChangeCount} 条源数据变动`}
                                             />
+                                            {isTransferWarehouseDetail(detail) ? (
+                                              <span
+                                                className="transferBadge"
+                                                title={getTransferTooltip(detail)}
+                                              >
+                                                转仓
+                                              </span>
+                                            ) : null}
                                             <TruncatedText
-                                              text={detail.warehousePoint}
+                                              text={getWarehousePointDisplay(detail)}
+                                              tooltip={getTransferTooltip(detail)}
                                               className="warehousePointText"
                                             />
                                           </div>
@@ -5277,20 +5291,38 @@ function SortIcon({
   return <ArrowUpDown size={14} aria-hidden="true" />;
 }
 
-function LocationCell({ value }: { value: string | null | undefined }) {
+function LocationCell({
+  value,
+  transferDetails = [],
+}: {
+  value: string | null | undefined;
+  transferDetails?: WarehouseDetail[];
+}) {
   const display = formatLocationPreview(value);
+  const transferTooltip = transferDetails
+    .map(getTransferTooltip)
+    .filter(Boolean)
+    .join("\n");
+  const tooltip = [display.tooltip === "—" ? "" : display.tooltip, transferTooltip]
+    .filter(Boolean)
+    .join("\n");
 
   return (
-    <AccessibleTooltip content={display.tooltip === "—" ? "" : display.tooltip}>
+    <AccessibleTooltip content={tooltip}>
       {({ triggerProps }) => (
         <span
           className="truncatedText locationCell"
-          title={display.tooltip === "—" ? undefined : display.tooltip}
+          title={tooltip || undefined}
           {...triggerProps}
         >
           <span className="locationPreviewText">{display.preview}</span>
           {display.extraCount ? (
             <span className="locationMoreBadge">+{display.extraCount}</span>
+          ) : null}
+          {transferDetails.length ? (
+            <span className="transferBadge compact">
+              转仓{transferDetails.length > 1 ? ` ${transferDetails.length}` : ""}
+            </span>
           ) : null}
         </span>
       )}
@@ -6042,6 +6074,43 @@ function getWarehouseDetailNoteDisplayValue(detail: WarehouseDetail) {
   }
 
   return detail.customerNote;
+}
+
+function isTransferWarehouseDetail(detail: WarehouseDetail) {
+  return detail.deliveryNature?.includes("转仓") ?? false;
+}
+
+function getWarehousePointDisplay(detail: WarehouseDetail) {
+  if (!isTransferWarehouseDetail(detail)) return detail.warehousePoint;
+
+  const route = parseTransferRoute(detail.notes, detail.warehousePoint);
+  return route ?? detail.warehousePoint;
+}
+
+function getTransferTooltip(detail: WarehouseDetail) {
+  if (!isTransferWarehouseDetail(detail)) return detail.warehousePoint;
+
+  const route = parseTransferRoute(detail.notes, detail.warehousePoint);
+  if (route) return `转仓：${route}`;
+
+  return `转仓，当前仓点：${detail.warehousePoint}`;
+}
+
+function parseTransferRoute(
+  sourceNote: string | null | undefined,
+  currentWarehousePoint: string,
+) {
+  const note = sourceNote?.trim();
+  if (!note) return null;
+
+  const routeMatch = note.match(
+    /([A-Z0-9][A-Z0-9_-]*)\s*(?:转仓至|转仓到|转至|转到|转仓|转|->|=>|→)\s*([A-Z0-9][A-Z0-9_-]*)/i,
+  );
+  if (!routeMatch) return null;
+
+  const from = routeMatch[1].toUpperCase();
+  const to = (routeMatch[2] || currentWarehousePoint).toUpperCase();
+  return `${from} → ${to}`;
 }
 
 function getWarehouseDeliveryProgress(container: TableContainerRecord) {
