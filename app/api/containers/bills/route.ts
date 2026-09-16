@@ -6,6 +6,7 @@ import {
   recordContainerBillDocumentDownload,
   saveContainerBillDocument,
 } from "@/lib/container-data";
+import { getCustomerVisibilitySettings } from "@/lib/customer-settings";
 
 export const dynamic = "force-dynamic";
 
@@ -25,9 +26,15 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const settings =
+      customer.role === "admin"
+        ? null
+        : await getCustomerVisibilitySettings(customer.id);
     const document = await getContainerBillDocument({
       customerId: customer.id,
       sourceOrderId,
+      requireSourcePickup:
+        settings?.revealDeliveryDetailsAfterPickup ?? false,
     });
 
     if (!document) {

@@ -14,6 +14,7 @@ import {
   FileText,
   GripVertical,
   LoaderCircle,
+  LockKeyhole,
   LogOut,
   RefreshCw,
   RotateCcw,
@@ -69,6 +70,7 @@ type CustomerVisibilitySettings = {
   showPod: boolean;
   showBol: boolean;
   showSourceChangeNotifications: boolean;
+  revealDeliveryDetailsAfterPickup: boolean;
 };
 
 type SyncRunStatus = {
@@ -92,6 +94,8 @@ type ContainerRecord = {
   etaDate: string | null;
   lfdDate: string | null;
   pickupDate: string | null;
+  unloadDate: string | null;
+  deliveryDetailsRestricted: boolean;
   operationMode: string | null;
   operationModeLabel: string;
   destination: string | null;
@@ -220,6 +224,7 @@ const defaultCustomerVisibilitySettings: CustomerVisibilitySettings = {
   showPod: true,
   showBol: true,
   showSourceChangeNotifications: true,
+  revealDeliveryDetailsAfterPickup: false,
 };
 const customerVisibilityOptions: Array<{
   key: keyof CustomerVisibilitySettings;
@@ -231,6 +236,10 @@ const customerVisibilityOptions: Array<{
   { key: "showPod", label: "POD" },
   { key: "showBol", label: "BOL" },
   { key: "showSourceChangeNotifications", label: "变动通知" },
+  {
+    key: "revealDeliveryDetailsAfterPickup",
+    label: "提柜后开放约仓",
+  },
 ];
 
 export default function ContainerDashboard() {
@@ -2529,8 +2538,21 @@ export default function ContainerDashboard() {
                 type="button"
                 className="tableIconButton expandIconButton"
                 aria-expanded={isExpanded}
-                aria-label={isExpanded ? "收起详情" : "展开详情"}
-                title={isExpanded ? "收起详情" : "展开详情"}
+                aria-label={
+                  row.original.deliveryDetailsRestricted
+                    ? "提柜后开放仓点和预约详情"
+                    : isExpanded
+                      ? "收起详情"
+                      : "展开详情"
+                }
+                title={
+                  row.original.deliveryDetailsRestricted
+                    ? "提柜后开放仓点和预约详情"
+                    : isExpanded
+                      ? "收起详情"
+                      : "展开详情"
+                }
+                disabled={row.original.deliveryDetailsRestricted}
                 onClick={() => toggleContainer(row.original.rowId)}
               >
                 <ChevronRight
@@ -2538,10 +2560,12 @@ export default function ContainerDashboard() {
                   size={15}
                   aria-hidden="true"
                 />
-                <SourceChangeDot
-                  count={sourceChangeCount}
-                  label={`${row.original.containerNumber} 有 ${sourceChangeCount} 条源数据变动`}
-                />
+                {row.original.deliveryDetailsRestricted ? null : (
+                  <SourceChangeDot
+                    count={sourceChangeCount}
+                    label={`${row.original.containerNumber} 有 ${sourceChangeCount} 条源数据变动`}
+                  />
+                )}
               </button>
             </div>
           );
@@ -2597,7 +2621,9 @@ export default function ContainerDashboard() {
         minSize: 104,
         sortingFn: dateSorting,
         cell: ({ row }) =>
-          isAdmin ? (
+          row.original.deliveryDetailsRestricted ? (
+            <RestrictedCell />
+          ) : isAdmin ? (
             <EditableDateCell
               container={row.original}
               field="orderDate"
@@ -2627,7 +2653,9 @@ export default function ContainerDashboard() {
         minSize: 96,
         sortingFn: dateSorting,
         cell: ({ row }) =>
-          isAdmin ? (
+          row.original.deliveryDetailsRestricted ? (
+            <RestrictedCell />
+          ) : isAdmin ? (
             <EditableDateCell
               container={row.original}
               field="etaDate"
@@ -2657,7 +2685,9 @@ export default function ContainerDashboard() {
         minSize: 96,
         sortingFn: dateSorting,
         cell: ({ row }) =>
-          isAdmin ? (
+          row.original.deliveryDetailsRestricted ? (
+            <RestrictedCell />
+          ) : isAdmin ? (
             <EditableDateCell
               container={row.original}
               field="lfdDate"
@@ -2710,15 +2740,27 @@ export default function ContainerDashboard() {
           ),
       },
       {
+        id: "unloadDate",
+        accessorFn: (row) => toDateSortValue(row.unloadDate),
+        header: "拆柜日期",
+        size: 112,
+        minSize: 104,
+        sortingFn: dateSorting,
+        cell: ({ row }) => <DateValue value={row.original.unloadDate} />,
+      },
+      {
         accessorKey: "operationModeLabel",
         header: "操作方式",
         size: 92,
         minSize: 84,
-        cell: ({ row }) => (
-          <span className={`pill ${row.original.operationMode ?? ""}`}>
-            {row.original.operationModeLabel}
-          </span>
-        ),
+        cell: ({ row }) =>
+          row.original.deliveryDetailsRestricted ? (
+            <RestrictedCell />
+          ) : (
+            <span className={`pill ${row.original.operationMode ?? ""}`}>
+              {row.original.operationModeLabel}
+            </span>
+          ),
       },
       {
         id: "location",
@@ -2727,14 +2769,17 @@ export default function ContainerDashboard() {
         size: 248,
         minSize: 200,
         maxSize: 320,
-        cell: ({ row }) => (
-          <LocationCell
-            value={getLocationText(row.original)}
-            transferDetails={row.original.warehouseDetails.filter(
-              isTransferWarehouseDetail,
-            )}
-          />
-        ),
+        cell: ({ row }) =>
+          row.original.deliveryDetailsRestricted ? (
+            <RestrictedCell />
+          ) : (
+            <LocationCell
+              value={getLocationText(row.original)}
+              transferDetails={row.original.warehouseDetails.filter(
+                isTransferWarehouseDetail,
+              )}
+            />
+          ),
       },
       {
         id: "warehouseDeliveryProgress",
@@ -2744,9 +2789,12 @@ export default function ContainerDashboard() {
         minSize: 128,
         maxSize: 170,
         sortingFn: "basic",
-        cell: ({ row }) => (
-          <WarehouseDeliveryProgressCell container={row.original} />
-        ),
+        cell: ({ row }) =>
+          row.original.deliveryDetailsRestricted ? (
+            <RestrictedCell />
+          ) : (
+            <WarehouseDeliveryProgressCell container={row.original} />
+          ),
       },
       {
         id: "bill",
@@ -2755,23 +2803,26 @@ export default function ContainerDashboard() {
         minSize: 164,
         maxSize: 210,
         enableSorting: false,
-        cell: ({ row }) => (
-          <ContainerBillCell
-            container={row.original}
-            document={row.original.billDocument}
-            error={containerBillErrors[getContainerBillKey(row.original.rowId)]}
-            isAdmin={isAdmin}
-            isUploading={savingContainerBills.has(
-              getContainerBillKey(row.original.rowId),
-            )}
-            onUpload={(file) =>
-              uploadContainerBill({
-                container: row.original,
-                file,
-              })
-            }
-          />
-        ),
+        cell: ({ row }) =>
+          row.original.deliveryDetailsRestricted ? (
+            <RestrictedCell />
+          ) : (
+            <ContainerBillCell
+              container={row.original}
+              document={row.original.billDocument}
+              error={containerBillErrors[getContainerBillKey(row.original.rowId)]}
+              isAdmin={isAdmin}
+              isUploading={savingContainerBills.has(
+                getContainerBillKey(row.original.rowId),
+              )}
+              onUpload={(file) =>
+                uploadContainerBill({
+                  container: row.original,
+                  file,
+                })
+              }
+            />
+          ),
       },
       {
         id: "extraChargeResponsibility",
@@ -2781,6 +2832,10 @@ export default function ContainerDashboard() {
         maxSize: 340,
         enableSorting: false,
         cell: ({ row }) => {
+          if (row.original.deliveryDetailsRestricted) {
+            return <RestrictedCell />;
+          }
+
           const key = getContainerTextKey(
             row.original.rowId,
             "extraChargeResponsibility",
@@ -5105,6 +5160,15 @@ function DateValue({ value }: { value: string | null | undefined }) {
   );
 }
 
+function RestrictedCell() {
+  return (
+    <span className="restrictedCell" title="海柜提柜后开放此信息">
+      <LockKeyhole size={13} aria-hidden="true" />
+      <span>提柜后开放</span>
+    </span>
+  );
+}
+
 function InlineEditableTextCell({
   className,
   editValue,
@@ -6201,11 +6265,17 @@ function createMockContainers(): TableContainerRecord[] {
   const edgeCases: Array<
     Omit<
       ContainerRecord,
-      "warehouseDetails" | "billDocument" | "extraChargeResponsibility"
+      | "warehouseDetails"
+      | "billDocument"
+      | "extraChargeResponsibility"
+      | "unloadDate"
+      | "deliveryDetailsRestricted"
     > & {
       extraChargeResponsibility?: string | null;
       warehouseDetails?: WarehouseDetail[];
       billDocument?: AppointmentDocumentMeta;
+      unloadDate?: string | null;
+      deliveryDetailsRestricted?: boolean;
     }
   > = [
     {
@@ -6390,6 +6460,8 @@ function createMockContainers(): TableContainerRecord[] {
       etaDate: `2026-03-${String((rowNumber % 24) + 1).padStart(2, "0")}`,
       lfdDate: `2026-03-${String((rowNumber % 24) + 3).padStart(2, "0")}`,
       pickupDate: rowNumber % 5 === 0 ? `2026-03-20` : null,
+      unloadDate: `2026-03-${String((rowNumber % 24) + 4).padStart(2, "0")}`,
+      deliveryDetailsRestricted: false,
       operationMode: isUnload ? "unload" : "direct_delivery",
       operationModeLabel: isUnload ? "拆柜" : "直送",
       destination: isUnload ? null : `DST${rowNumber}, Direct Destination ${rowNumber}`,
@@ -6437,6 +6509,8 @@ function createMockContainers(): TableContainerRecord[] {
   return [...edgeCases, ...generatedRows].map((container, index) => {
     const normalizedContainer: ContainerRecord = {
       ...container,
+      unloadDate: container.unloadDate ?? null,
+      deliveryDetailsRestricted: container.deliveryDetailsRestricted ?? false,
       extraChargeResponsibility: container.extraChargeResponsibility ?? null,
       billDocument: container.billDocument ?? emptyAppointmentDocument(),
       warehouseDetails: container.warehouseDetails ?? [],

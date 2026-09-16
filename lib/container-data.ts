@@ -22,6 +22,8 @@ export type ContainerRecord = {
   etaDate: string | null;
   lfdDate: string | null;
   pickupDate: string | null;
+  unloadDate: string | null;
+  deliveryDetailsRestricted: boolean;
   operationMode: string | null;
   operationModeLabel: string;
   destination: string | null;
@@ -146,6 +148,8 @@ type ContainerRow = {
   eta_date: Date | string | null;
   lfd_date: Date | string | null;
   pickup_date: Date | string | null;
+  source_pickup_date: Date | string | null;
+  unload_date: Date | string | null;
   operation_mode: string | null;
   destination: string | null;
   warehouse_points: string | null;
@@ -530,6 +534,21 @@ const appWarehouseDetailTextColumns: Record<
 let documentTrackingSchemaPromise: Promise<void> | null = null;
 let warehouseDetailTextSchemaPromise: Promise<void> | null = null;
 let sourceChangeEventsSchemaPromise: Promise<void> | null = null;
+let containerReleaseSchemaPromise: Promise<void> | null = null;
+
+async function ensureContainerReleaseSchema() {
+  containerReleaseSchemaPromise ??= withAppTransaction(async (client) => {
+    await client.query(`
+      alter table public.portal_containers
+        add column if not exists source_unload_date date;
+    `);
+  }).catch((error) => {
+    containerReleaseSchemaPromise = null;
+    throw error;
+  });
+
+  return containerReleaseSchemaPromise;
+}
 
 async function ensureDocumentTrackingSchema() {
   documentTrackingSchemaPromise ??= withAppTransaction(async (client) => {
@@ -633,6 +652,16 @@ const baseFrom = `
     on c.id = o.customer_id
   left join public.locations order_location
     on order_location.location_id = o.delivery_location_id
+  left join lateral (
+    select ir.planned_unload_at
+    from wms.inbound_receipt ir
+    where ir.order_id = o.order_id
+    order by
+      (ir.planned_unload_at is not null) desc,
+      ir.updated_at desc nulls last,
+      ir.inbound_receipt_id desc
+    limit 1
+  ) inbound_schedule on true
   left join lateral (
     select string_agg(
       distinct coalesce(
@@ -805,6 +834,7 @@ export async function getContainers({
   warehouseDeliveryProgressStatus,
   pickupStatus,
   sourceChangeEventView = "none",
+  restrictDeliveryDetailsUntilSourcePickup = false,
   page = 1,
   pageSize = 100,
 }: {
@@ -818,12 +848,14 @@ export async function getContainers({
   warehouseDeliveryProgressStatus?: WarehouseDeliveryProgressStatus | null;
   pickupStatus?: PickupStatus | null;
   sourceChangeEventView?: "admin" | "customer" | "none";
+  restrictDeliveryDetailsUntilSourcePickup?: boolean;
   page?: number;
   pageSize?: number;
 }): Promise<ContainerQueryResult> {
   await ensureDocumentTrackingSchema();
   await ensureWarehouseDetailTextSchema();
   await ensureSourceChangeEventsSchema();
+  await ensureContainerReleaseSchema();
 
   const params: string[] = [];
   const baseFilters: string[] = ["pc.source_active = true"];
@@ -1028,6 +1060,8 @@ export async function getContainers({
           ${appDateFilterColumns.etaDate} as eta_date,
           ${appDateFilterColumns.lfdDate} as lfd_date,
           ${appDateFilterColumns.pickupDate} as pickup_date,
+          pc.source_pickup_date,
+          pc.source_unload_date as unload_date,
           coalesce(pc.manual_operation_mode, pc.source_operation_mode) as operation_mode,
           coalesce(pc.manual_destination, pc.source_destination) as destination,
           coalesce(pc.manual_warehouse_points, pc.source_warehouse_points) as warehouse_points,
@@ -1159,7 +1193,10 @@ export async function getContainers({
 
     return {
       containers: rows(result).map((row) =>
-        toContainerRecord(row, { showAllWarehouseAppointments }),
+        toContainerRecord(row, {
+          showAllWarehouseAppointments,
+          restrictDeliveryDetailsUntilSourcePickup,
+        }),
       ),
       total: Number(rows(dataCountResult)[0]?.total ?? 0),
       allContainers: Number(rows(countResult)[0]?.total ?? 0),
@@ -1768,12 +1805,14 @@ export async function getWarehouseAppointmentDocument({
   sourceOrderDetailId,
   sourceAppointmentLineId,
   documentType,
+  requireSourcePickup = false,
 }: {
   customerId: string;
   sourceOrderId: string;
   sourceOrderDetailId: string;
   sourceAppointmentLineId: string;
   documentType: AppointmentDocumentType;
+  requireSourcePickup?: boolean;
 }): Promise<AppointmentDocumentFile | null> {
   await ensureDocumentTrackingSchema();
 
@@ -1810,6 +1849,7 @@ export async function getWarehouseAppointmentDocument({
           and pwd.document_type = $4
           and pc.source_customer_id = $5
           and pc.source_active = true
+          and (not $6::boolean or pc.source_pickup_date is not null)
         limit 1
       `,
       [
@@ -1818,6 +1858,7 @@ export async function getWarehouseAppointmentDocument({
         sourceAppointmentLineId,
         documentType,
         customerId,
+        requireSourcePickup,
       ],
     );
     const document = rows(result)[0];
@@ -1964,9 +2005,11 @@ export async function saveContainerBillDocument({
 export async function getContainerBillDocument({
   customerId,
   sourceOrderId,
+  requireSourcePickup = false,
 }: {
   customerId: string;
   sourceOrderId: string;
+  requireSourcePickup?: boolean;
 }): Promise<AppointmentDocumentFile | null> {
   await ensureDocumentTrackingSchema();
 
@@ -1990,9 +2033,10 @@ export async function getContainerBillDocument({
         where pcb.source_order_id = $1
           and pc.source_customer_id = $2
           and pc.source_active = true
+          and (not $3::boolean or pc.source_pickup_date is not null)
         limit 1
       `,
-      [sourceOrderId, customerId],
+      [sourceOrderId, customerId, requireSourcePickup],
     );
     const document = rows(result)[0];
 
@@ -2167,6 +2211,8 @@ export async function getSourceContainers({
           o.eta_date,
           o.lfd_date,
           o.pickup_date,
+          o.pickup_date as source_pickup_date,
+          inbound_schedule.planned_unload_at as unload_date,
           o.operation_mode,
           coalesce(
             nullif(
@@ -2216,8 +2262,15 @@ function toContainerRecord(
   row: ContainerRow,
   {
     showAllWarehouseAppointments = false,
-  }: { showAllWarehouseAppointments?: boolean } = {},
+    restrictDeliveryDetailsUntilSourcePickup = false,
+  }: {
+    showAllWarehouseAppointments?: boolean;
+    restrictDeliveryDetailsUntilSourcePickup?: boolean;
+  } = {},
 ): ContainerRecord {
+  const sourcePickupDate = formatDate(row.source_pickup_date);
+  const deliveryDetailsRestricted =
+    restrictDeliveryDetailsUntilSourcePickup && !sourcePickupDate;
   const appointments = (row.appointments ?? []).map(toDeliveryAppointment);
   const appointmentDocuments = buildAppointmentDocumentMap(
     row.appointment_documents ?? [],
@@ -2238,18 +2291,28 @@ function toContainerRecord(
     customerId: row.customer_id,
     customerCode: row.customer_code,
     customerName: row.customer_name ?? "未分配客户",
-    orderDate: formatDate(row.order_date),
-    etaDate: formatDate(row.eta_date),
-    lfdDate: formatDate(row.lfd_date),
-    pickupDate: formatDate(row.pickup_date),
-    operationMode: row.operation_mode,
-    operationModeLabel: formatOperationMode(row.operation_mode),
-    destination: row.destination,
-    warehousePoints: row.warehouse_points,
-    extraChargeResponsibility: row.extra_charge_responsibility,
-    appointments,
-    warehouseDetails,
-    billDocument: toContainerBillDocumentMeta(row.bill_document),
+    orderDate: deliveryDetailsRestricted ? null : formatDate(row.order_date),
+    etaDate: deliveryDetailsRestricted ? null : formatDate(row.eta_date),
+    lfdDate: deliveryDetailsRestricted ? null : formatDate(row.lfd_date),
+    pickupDate: restrictDeliveryDetailsUntilSourcePickup
+      ? sourcePickupDate
+      : formatDate(row.pickup_date),
+    unloadDate: formatDate(row.unload_date),
+    deliveryDetailsRestricted,
+    operationMode: deliveryDetailsRestricted ? null : row.operation_mode,
+    operationModeLabel: deliveryDetailsRestricted
+      ? "提柜后开放"
+      : formatOperationMode(row.operation_mode),
+    destination: deliveryDetailsRestricted ? null : row.destination,
+    warehousePoints: deliveryDetailsRestricted ? null : row.warehouse_points,
+    extraChargeResponsibility: deliveryDetailsRestricted
+      ? null
+      : row.extra_charge_responsibility,
+    appointments: deliveryDetailsRestricted ? [] : appointments,
+    warehouseDetails: deliveryDetailsRestricted ? [] : warehouseDetails,
+    billDocument: deliveryDetailsRestricted
+      ? emptyAppointmentDocument()
+      : toContainerBillDocumentMeta(row.bill_document),
   };
 }
 

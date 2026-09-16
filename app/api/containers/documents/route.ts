@@ -7,6 +7,7 @@ import {
   saveWarehouseAppointmentDocument,
   type AppointmentDocumentType,
 } from "@/lib/container-data";
+import { getCustomerVisibilitySettings } from "@/lib/customer-settings";
 
 export const dynamic = "force-dynamic";
 
@@ -31,8 +32,14 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const settings =
+      customer.role === "admin"
+        ? null
+        : await getCustomerVisibilitySettings(customer.id);
     const document = await getWarehouseAppointmentDocument({
       customerId: customer.id,
+      requireSourcePickup:
+        settings?.revealDeliveryDetailsAfterPickup ?? false,
       ...payload,
     });
 

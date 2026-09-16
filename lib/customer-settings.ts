@@ -7,6 +7,7 @@ export type CustomerVisibilitySettings = {
   showPod: boolean;
   showBol: boolean;
   showSourceChangeNotifications: boolean;
+  revealDeliveryDetailsAfterPickup: boolean;
 };
 
 type CustomerVisibilitySettingsRow = {
@@ -16,6 +17,7 @@ type CustomerVisibilitySettingsRow = {
   showPod: boolean | null;
   showBol: boolean | null;
   showSourceChangeNotifications: boolean | null;
+  revealDeliveryDetailsAfterPickup: boolean | null;
 };
 
 export const defaultCustomerVisibilitySettings: CustomerVisibilitySettings = {
@@ -25,6 +27,7 @@ export const defaultCustomerVisibilitySettings: CustomerVisibilitySettings = {
   showPod: true,
   showBol: true,
   showSourceChangeNotifications: true,
+  revealDeliveryDetailsAfterPickup: false,
 };
 
 let customerSettingsSchemaPromise: Promise<void> | null = null;
@@ -33,7 +36,17 @@ async function ensureCustomerSettingsSchema() {
   customerSettingsSchemaPromise ??= withAppTransaction(async (client) => {
     await client.query(`
       alter table public.portal_customers
-        add column if not exists show_source_change_notifications boolean not null default true;
+        add column if not exists show_source_change_notifications boolean not null default true,
+        add column if not exists reveal_delivery_details_after_pickup boolean;
+
+      update public.portal_customers
+      set reveal_delivery_details_after_pickup =
+        case when upper(btrim(coalesce(code, ''))) = 'RONGYI-OAK' then true else false end
+      where reveal_delivery_details_after_pickup is null;
+
+      alter table public.portal_customers
+        alter column reveal_delivery_details_after_pickup set default false,
+        alter column reveal_delivery_details_after_pickup set not null;
     `);
   }).catch((error) => {
     customerSettingsSchemaPromise = null;
@@ -57,7 +70,8 @@ export async function getCustomerVisibilitySettings(
           show_effective_pallets as "showEffectivePallets",
           show_pod as "showPod",
           show_bol as "showBol",
-          show_source_change_notifications as "showSourceChangeNotifications"
+          show_source_change_notifications as "showSourceChangeNotifications",
+          reveal_delivery_details_after_pickup as "revealDeliveryDetailsAfterPickup"
         from public.portal_customers
         where source_customer_id = $1
           and source_active = true
@@ -90,6 +104,7 @@ export async function updateCustomerVisibilitySettings({
           show_pod = $5,
           show_bol = $6,
           show_source_change_notifications = $7,
+          reveal_delivery_details_after_pickup = $8,
           updated_at = now()
         where source_customer_id = $1
           and source_active = true
@@ -99,7 +114,8 @@ export async function updateCustomerVisibilitySettings({
           show_effective_pallets as "showEffectivePallets",
           show_pod as "showPod",
           show_bol as "showBol",
-          show_source_change_notifications as "showSourceChangeNotifications"
+          show_source_change_notifications as "showSourceChangeNotifications",
+          reveal_delivery_details_after_pickup as "revealDeliveryDetailsAfterPickup"
       `,
       [
         customerId,
@@ -109,6 +125,7 @@ export async function updateCustomerVisibilitySettings({
         settings.showPod,
         settings.showBol,
         settings.showSourceChangeNotifications,
+        settings.revealDeliveryDetailsAfterPickup,
       ],
     );
 
@@ -135,5 +152,8 @@ export function normalizeSettings(
     showSourceChangeNotifications:
       settings.showSourceChangeNotifications ??
       defaultCustomerVisibilitySettings.showSourceChangeNotifications,
+    revealDeliveryDetailsAfterPickup:
+      settings.revealDeliveryDetailsAfterPickup ??
+      defaultCustomerVisibilitySettings.revealDeliveryDetailsAfterPickup,
   };
 }

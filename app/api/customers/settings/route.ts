@@ -85,6 +85,7 @@ function parseSettings(value: unknown): CustomerVisibilitySettings | null {
     "showPod",
     "showBol",
     "showSourceChangeNotifications",
+    "revealDeliveryDetailsAfterPickup",
   ];
 
   for (const key of keys) {

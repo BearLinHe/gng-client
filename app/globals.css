@@ -1521,6 +1521,27 @@ body.rowDragActive * {
   font-variant-numeric: tabular-nums;
 }
 
+.restrictedCell {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.restrictedCell svg {
+  flex: 0 0 auto;
+}
+
+.expandIconButton:disabled {
+  cursor: not-allowed;
+  color: #a8b4c4;
+  opacity: 0.72;
+}
+
 .editableDateCell {
   width: 100%;
   min-width: 0;
