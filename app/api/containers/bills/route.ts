@@ -21,7 +21,10 @@ export async function GET(request: NextRequest) {
   const sourceOrderId = request.nextUrl.searchParams
     .get("sourceOrderId")
     ?.trim();
-  if (!sourceOrderId) {
+  const documentId = parseDocumentId(
+    request.nextUrl.searchParams.get("documentId"),
+  );
+  if (!sourceOrderId || !documentId) {
     return NextResponse.json({ error: "账单参数不正确" }, { status: 400 });
   }
 
@@ -32,6 +35,7 @@ export async function GET(request: NextRequest) {
         : await getCustomerVisibilitySettings(customer.id);
     const document = await getContainerBillDocument({
       customerId: customer.id,
+      documentId,
       sourceOrderId,
       requireSourcePickup:
         settings?.revealDeliveryDetailsAfterPickup ?? false,
@@ -44,6 +48,7 @@ export async function GET(request: NextRequest) {
     if (customer.role !== "admin") {
       await recordContainerBillDocumentDownload({
         customerId: customer.id,
+        documentId,
         sourceOrderId,
       });
     }
@@ -136,6 +141,11 @@ export async function POST(request: NextRequest) {
 
 function getStringValue(value: FormDataEntryValue | string | null) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function parseDocumentId(value: string | null) {
+  const documentId = value?.trim() ?? "";
+  return /^\d+$/.test(documentId) && documentId !== "0" ? documentId : null;
 }
 
 function isFormFile(value: FormDataEntryValue | null): value is File {

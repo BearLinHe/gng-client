@@ -190,6 +190,11 @@ type WarehouseAppointment = {
 
 type AppointmentDocumentMeta = {
   hasFile: boolean;
+  files: AppointmentDocumentFileMeta[];
+};
+
+type AppointmentDocumentFileMeta = {
+  id: string;
   fileName: string | null;
   mimeType: string | null;
   fileSize: number | null;
@@ -2174,13 +2179,13 @@ export default function ContainerDashboard() {
     warehouseDetail,
     appointment,
     documentType,
-    file,
+    files,
   }: {
     container: TableContainerRecord;
     warehouseDetail: WarehouseDetail;
     appointment: WarehouseAppointment;
     documentType: AppointmentDocumentType;
-    file: File;
+    files: File[];
   }) {
     const sourceOrderDetailId =
       appointment.sourceOrderDetailId || warehouseDetail.sourceOrderDetailId;
@@ -2192,7 +2197,7 @@ export default function ContainerDashboard() {
     );
     if (savingAppointmentDocumentKeysRef.current.has(key)) return;
 
-    const validationError = validateDocumentFile(file);
+    const validationError = validateDocumentFiles(files);
     if (validationError) {
       setAppointmentDocumentErrors((current) => ({
         ...current,
@@ -2202,20 +2207,22 @@ export default function ContainerDashboard() {
     }
 
     if (mockLongTable) {
-      applyUpdatedAppointmentDocument(
-        container,
-        sourceOrderDetailId,
-        appointment.sourceAppointmentLineId,
-        documentType,
-        {
-          hasFile: true,
-          fileName: file.name || "document",
-          mimeType: file.type || guessDocumentMimeType(file.name),
-          fileSize: file.size,
-          uploadedAt: new Date().toISOString(),
-          downloadCount: 0,
-          lastDownloadedAt: null,
-        },
+      files.forEach((file, index) =>
+        applyUpdatedAppointmentDocument(
+          container,
+          sourceOrderDetailId,
+          appointment.sourceAppointmentLineId,
+          documentType,
+          {
+            id: `mock-${Date.now()}-${index}`,
+            fileName: file.name || "document",
+            mimeType: file.type || guessDocumentMimeType(file.name),
+            fileSize: file.size,
+            uploadedAt: new Date().toISOString(),
+            downloadCount: 0,
+            lastDownloadedAt: null,
+          },
+        ),
       );
       return;
     }
@@ -2228,36 +2235,38 @@ export default function ContainerDashboard() {
     });
 
     try {
-      const formData = new FormData();
-      formData.set("sourceOrderId", container.sourceOrderId);
-      formData.set("sourceOrderDetailId", sourceOrderDetailId);
-      formData.set(
-        "sourceAppointmentLineId",
-        appointment.sourceAppointmentLineId,
-      );
-      formData.set("documentType", documentType);
-      formData.set("file", file);
+      for (const file of files) {
+        const formData = new FormData();
+        formData.set("sourceOrderId", container.sourceOrderId);
+        formData.set("sourceOrderDetailId", sourceOrderDetailId);
+        formData.set(
+          "sourceAppointmentLineId",
+          appointment.sourceAppointmentLineId,
+        );
+        formData.set("documentType", documentType);
+        formData.set("file", file);
 
-      const response = await fetch("/api/containers/documents", {
-        method: "POST",
-        body: formData,
-      });
-      const payload = (await response.json()) as {
-        document?: AppointmentDocumentMeta;
-        error?: string;
-      };
+        const response = await fetch("/api/containers/documents", {
+          method: "POST",
+          body: formData,
+        });
+        const payload = (await response.json()) as {
+          document?: AppointmentDocumentFileMeta;
+          error?: string;
+        };
 
-      if (!response.ok || !payload.document) {
-        throw new Error(payload.error ?? "上传失败");
+        if (!response.ok || !payload.document) {
+          throw new Error(payload.error ?? `上传 ${file.name} 失败`);
+        }
+
+        applyUpdatedAppointmentDocument(
+          container,
+          sourceOrderDetailId,
+          appointment.sourceAppointmentLineId,
+          documentType,
+          payload.document,
+        );
       }
-
-      applyUpdatedAppointmentDocument(
-        container,
-        sourceOrderDetailId,
-        appointment.sourceAppointmentLineId,
-        documentType,
-        payload.document,
-      );
     } catch (uploadError) {
       setAppointmentDocumentErrors((current) => ({
         ...current,
@@ -2273,7 +2282,7 @@ export default function ContainerDashboard() {
     sourceOrderDetailId: string,
     sourceAppointmentLineId: string,
     documentType: AppointmentDocumentType,
-    document: AppointmentDocumentMeta,
+    document: AppointmentDocumentFileMeta,
   ) {
     setContainers((current) =>
       current.map((row) =>
@@ -2299,7 +2308,12 @@ export default function ContainerDashboard() {
                                 sourceOrderDetailId,
                               [documentType === "pod"
                                 ? "podDocument"
-                                : "bolDocument"]: document,
+                                : "bolDocument"]: appendDocumentFile(
+                                documentType === "pod"
+                                  ? appointment.podDocument
+                                  : appointment.bolDocument,
+                                document,
+                              ),
                             }
                           : appointment,
                       ),
@@ -2314,15 +2328,15 @@ export default function ContainerDashboard() {
 
   async function uploadContainerBill({
     container,
-    file,
+    files,
   }: {
     container: TableContainerRecord;
-    file: File;
+    files: File[];
   }) {
     const key = getContainerBillKey(container.rowId);
     if (savingContainerBillKeysRef.current.has(key)) return;
 
-    const validationError = validateDocumentFile(file);
+    const validationError = validateDocumentFiles(files);
     if (validationError) {
       setContainerBillErrors((current) => ({
         ...current,
@@ -2332,15 +2346,17 @@ export default function ContainerDashboard() {
     }
 
     if (mockLongTable) {
-      applyUpdatedContainerBill(container, {
-        hasFile: true,
-        fileName: file.name || "bill",
-        mimeType: file.type || guessDocumentMimeType(file.name),
-        fileSize: file.size,
-        uploadedAt: new Date().toISOString(),
-        downloadCount: 0,
-        lastDownloadedAt: null,
-      });
+      files.forEach((file, index) =>
+        applyUpdatedContainerBill(container, {
+          id: `mock-bill-${Date.now()}-${index}`,
+          fileName: file.name || "bill",
+          mimeType: file.type || guessDocumentMimeType(file.name),
+          fileSize: file.size,
+          uploadedAt: new Date().toISOString(),
+          downloadCount: 0,
+          lastDownloadedAt: null,
+        }),
+      );
       return;
     }
 
@@ -2352,24 +2368,26 @@ export default function ContainerDashboard() {
     });
 
     try {
-      const formData = new FormData();
-      formData.set("sourceOrderId", container.sourceOrderId);
-      formData.set("file", file);
+      for (const file of files) {
+        const formData = new FormData();
+        formData.set("sourceOrderId", container.sourceOrderId);
+        formData.set("file", file);
 
-      const response = await fetch("/api/containers/bills", {
-        method: "POST",
-        body: formData,
-      });
-      const payload = (await response.json()) as {
-        document?: AppointmentDocumentMeta;
-        error?: string;
-      };
+        const response = await fetch("/api/containers/bills", {
+          method: "POST",
+          body: formData,
+        });
+        const payload = (await response.json()) as {
+          document?: AppointmentDocumentFileMeta;
+          error?: string;
+        };
 
-      if (!response.ok || !payload.document) {
-        throw new Error(payload.error ?? "上传账单失败");
+        if (!response.ok || !payload.document) {
+          throw new Error(payload.error ?? `上传 ${file.name} 失败`);
+        }
+
+        applyUpdatedContainerBill(container, payload.document);
       }
-
-      applyUpdatedContainerBill(container, payload.document);
     } catch (uploadError) {
       setContainerBillErrors((current) => ({
         ...current,
@@ -2383,14 +2401,14 @@ export default function ContainerDashboard() {
 
   function applyUpdatedContainerBill(
     original: TableContainerRecord,
-    document: AppointmentDocumentMeta,
+    document: AppointmentDocumentFileMeta,
   ) {
     setContainers((current) =>
       current.map((row) =>
         row.rowId === original.rowId
           ? {
               ...row,
-              billDocument: document,
+              billDocument: appendDocumentFile(row.billDocument, document),
             }
           : row,
       ),
@@ -2401,8 +2419,8 @@ export default function ContainerDashboard() {
     container: TableContainerRecord,
     warehouseDetail: WarehouseDetail,
     action: "notifyCustomer" | "acknowledge",
+    eventIds: number[],
   ) {
-    const eventIds = warehouseDetail.sourceChangeEvents.map((event) => event.id);
     if (!eventIds.length) return;
 
     const key = getSourceChangeEventGroupKey(
@@ -2815,10 +2833,10 @@ export default function ContainerDashboard() {
               isUploading={savingContainerBills.has(
                 getContainerBillKey(row.original.rowId),
               )}
-              onUpload={(file) =>
+              onUpload={(files) =>
                 uploadContainerBill({
                   container: row.original,
-                  file,
+                  files,
                 })
               }
             />
@@ -4056,6 +4074,17 @@ export default function ContainerDashboard() {
                                           <div className="warehouseAppointmentPanel">
                                             {detail.sourceChangeEvents.length ? (
                                               <SourceChangeEventsPanel
+                                                key={detail.sourceChangeEvents
+                                                  .map((event) => event.id)
+                                                  .join(",")}
+                                                defaultSelectedEventIds={detail.sourceChangeEvents
+                                                  .filter((event) =>
+                                                    isSourceChangeFieldVisible(
+                                                      event,
+                                                      customerSettings,
+                                                    ),
+                                                  )
+                                                  .map((event) => event.id)}
                                                 detail={detail}
                                                 error={
                                                   sourceChangeEventErrors[
@@ -4067,18 +4096,20 @@ export default function ContainerDashboard() {
                                                 }
                                                 isAdmin={isAdmin}
                                                 isSaving={sourceChangeSaving}
-                                                onAcknowledge={() =>
+                                                onAcknowledge={(eventIds) =>
                                                   handleSourceChangeEvents(
                                                     container,
                                                     detail,
                                                     "acknowledge",
+                                                    eventIds,
                                                   )
                                                 }
-                                                onNotifyCustomer={() =>
+                                                onNotifyCustomer={(eventIds) =>
                                                   handleSourceChangeEvents(
                                                     container,
                                                     detail,
                                                     "notifyCustomer",
+                                                    eventIds,
                                                   )
                                                 }
                                               />
@@ -4469,7 +4500,7 @@ export default function ContainerDashboard() {
                                                             appointment,
                                                             detail,
                                                           )}
-                                                          onUpload={(file) =>
+                                                          onUpload={(files) =>
                                                             uploadAppointmentDocument(
                                                               {
                                                                 container,
@@ -4478,7 +4509,7 @@ export default function ContainerDashboard() {
                                                                 appointment,
                                                                 documentType:
                                                                   "pod",
-                                                                file,
+                                                                files,
                                                               },
                                                             )
                                                           }
@@ -4525,7 +4556,7 @@ export default function ContainerDashboard() {
                                                             appointment,
                                                             detail,
                                                           )}
-                                                          onUpload={(file) =>
+                                                          onUpload={(files) =>
                                                             uploadAppointmentDocument(
                                                               {
                                                                 container,
@@ -4534,7 +4565,7 @@ export default function ContainerDashboard() {
                                                                 appointment,
                                                                 documentType:
                                                                   "bol",
-                                                                file,
+                                                                files,
                                                               },
                                                             )
                                                           }
@@ -4941,7 +4972,7 @@ function AppointmentDocumentCell({
   error?: string;
   isAdmin: boolean;
   isUploading: boolean;
-  onUpload: (file: File) => void;
+  onUpload: (files: File[]) => void;
   sourceOrderDetailId: string;
 }) {
   const label = documentType.toUpperCase();
@@ -4953,67 +4984,24 @@ function AppointmentDocumentCell({
   );
 
   return (
-    <div className="documentCell">
-      {document.hasFile ? (
-        <a
-          className="documentViewLink"
-          href={getAppointmentDocumentUrl({
-            appointment,
-            container,
-            documentType,
-            sourceOrderDetailId,
-          })}
-          target="_blank"
-          rel="noreferrer"
-          title={document.fileName ?? `查看 ${label}`}
-        >
-          <FileText size={14} aria-hidden="true" />
-          查看
-        </a>
-      ) : (
-        <span className="documentEmpty">未上传</span>
-      )}
-      {isAdmin && document.hasFile ? (
-        <DocumentDownloadStatus document={document} />
-      ) : null}
-      {canUpload ? (
-        <label
-          className={[
-            "documentUploadButton",
-            isUploading ? "isUploading" : "",
-          ]
-            .filter(Boolean)
-            .join(" ")}
-          aria-label={`${document.hasFile ? "更换" : "上传"} ${label}`}
-          role="button"
-          tabIndex={isUploading ? -1 : 0}
-          title={`${document.hasFile ? "更换" : "上传"} ${label}`}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter" && event.key !== " ") return;
-            event.preventDefault();
-            event.currentTarget.querySelector("input")?.click();
-          }}
-        >
-          {isUploading ? (
-            <LoaderCircle className="cellSpinner" size={13} aria-hidden="true" />
-          ) : (
-            <Upload size={13} aria-hidden="true" />
-          )}
-          <span>{isUploading ? "上传中" : document.hasFile ? "更换" : "上传"}</span>
-          <input
-            accept="image/*,application/pdf"
-            disabled={isUploading}
-            type="file"
-            onChange={(event) => {
-              const file = event.currentTarget.files?.[0];
-              event.currentTarget.value = "";
-              if (file) onUpload(file);
-            }}
-          />
-        </label>
-      ) : null}
-      {error ? <span className="documentError">{error}</span> : null}
-    </div>
+    <DocumentCollectionCell
+      canUpload={canUpload}
+      document={document}
+      error={error}
+      getDocumentUrl={(file) =>
+        getAppointmentDocumentUrl({
+          appointment,
+          container,
+          documentId: file.id,
+          documentType,
+          sourceOrderDetailId,
+        })
+      }
+      isAdmin={isAdmin}
+      isUploading={isUploading}
+      label={label}
+      onUpload={onUpload}
+    />
   );
 }
 
@@ -5030,28 +5018,76 @@ function ContainerBillCell({
   error?: string;
   isAdmin: boolean;
   isUploading: boolean;
-  onUpload: (file: File) => void;
+  onUpload: (files: File[]) => void;
 }) {
   return (
-    <div className="documentCell billDocumentCell">
-      {document.hasFile ? (
-        <a
-          className="documentViewLink"
-          href={getContainerBillUrl(container)}
-          target="_blank"
-          rel="noreferrer"
-          title={document.fileName ?? "查看账单"}
-        >
-          <FileText size={14} aria-hidden="true" />
-          查看
-        </a>
-      ) : (
+    <DocumentCollectionCell
+      canUpload={isAdmin}
+      className="billDocumentCell"
+      document={document}
+      error={error}
+      getDocumentUrl={(file) => getContainerBillUrl(container, file.id)}
+      isAdmin={isAdmin}
+      isUploading={isUploading}
+      label="账单"
+      onUpload={onUpload}
+    />
+  );
+}
+
+function DocumentCollectionCell({
+  canUpload,
+  className,
+  document,
+  error,
+  getDocumentUrl,
+  isAdmin,
+  isUploading,
+  label,
+  onUpload,
+}: {
+  canUpload: boolean;
+  className?: string;
+  document: AppointmentDocumentMeta;
+  error?: string;
+  getDocumentUrl: (file: AppointmentDocumentFileMeta) => string;
+  isAdmin: boolean;
+  isUploading: boolean;
+  label: string;
+  onUpload: (files: File[]) => void;
+}) {
+  const files = document.files;
+
+  return (
+    <div className={["documentCell", className].filter(Boolean).join(" ")}>
+      {!files.length ? (
         <span className="documentEmpty">未上传</span>
+      ) : files.length === 1 ? (
+        <DocumentFileLink file={files[0]} href={getDocumentUrl(files[0])} />
+      ) : (
+        <details className="documentMenu">
+          <summary className="documentViewLink">
+            <FileText size={14} aria-hidden="true" />
+            查看 {files.length}
+          </summary>
+          <div className="documentMenuList">
+            {files.map((file, index) => (
+              <div className="documentMenuItem" key={file.id}>
+                <DocumentFileLink
+                  file={file}
+                  href={getDocumentUrl(file)}
+                  index={index}
+                />
+                {isAdmin ? <DocumentDownloadStatus document={file} /> : null}
+              </div>
+            ))}
+          </div>
+        </details>
       )}
-      {isAdmin && document.hasFile ? (
-        <DocumentDownloadStatus document={document} />
+      {isAdmin && files.length === 1 ? (
+        <DocumentDownloadStatus document={files[0]} />
       ) : null}
-      {isAdmin ? (
+      {canUpload ? (
         <label
           className={[
             "documentUploadButton",
@@ -5059,10 +5095,10 @@ function ContainerBillCell({
           ]
             .filter(Boolean)
             .join(" ")}
-          aria-label={`${document.hasFile ? "更换" : "上传"}账单`}
+          aria-label={`添加${label}文件`}
           role="button"
           tabIndex={isUploading ? -1 : 0}
-          title={`${document.hasFile ? "更换" : "上传"}账单`}
+          title={`添加${label}文件（可多选）`}
           onKeyDown={(event) => {
             if (event.key !== "Enter" && event.key !== " ") return;
             event.preventDefault();
@@ -5074,21 +5110,47 @@ function ContainerBillCell({
           ) : (
             <Upload size={13} aria-hidden="true" />
           )}
-          <span>{isUploading ? "上传中" : document.hasFile ? "更换" : "上传"}</span>
+          <span>{isUploading ? "上传中" : files.length ? "添加" : "上传"}</span>
           <input
             accept="image/*,application/pdf"
             disabled={isUploading}
+            multiple
             type="file"
             onChange={(event) => {
-              const file = event.currentTarget.files?.[0];
+              const selectedFiles = Array.from(event.currentTarget.files ?? []);
               event.currentTarget.value = "";
-              if (file) onUpload(file);
+              if (selectedFiles.length) onUpload(selectedFiles);
             }}
           />
         </label>
       ) : null}
       {error ? <span className="documentError">{error}</span> : null}
     </div>
+  );
+}
+
+function DocumentFileLink({
+  file,
+  href,
+  index,
+}: {
+  file: AppointmentDocumentFileMeta;
+  href: string;
+  index?: number;
+}) {
+  const fallbackName = index === undefined ? "查看" : `文件 ${index + 1}`;
+
+  return (
+    <a
+      className="documentViewLink"
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      title={file.fileName ?? fallbackName}
+    >
+      <FileText size={14} aria-hidden="true" />
+      <span>{index === undefined ? "查看" : file.fileName ?? fallbackName}</span>
+    </a>
   );
 }
 
@@ -5127,7 +5189,7 @@ function WarehouseDeliveryProgressCell({
 function DocumentDownloadStatus({
   document,
 }: {
-  document: AppointmentDocumentMeta;
+  document: AppointmentDocumentFileMeta;
 }) {
   const downloadCount = document.downloadCount || 0;
 
@@ -5285,6 +5347,7 @@ function SourceChangeDot({ count, label }: { count: number; label: string }) {
 }
 
 function SourceChangeEventsPanel({
+  defaultSelectedEventIds,
   detail,
   error,
   isAdmin,
@@ -5292,13 +5355,33 @@ function SourceChangeEventsPanel({
   onAcknowledge,
   onNotifyCustomer,
 }: {
+  defaultSelectedEventIds: number[];
   detail: WarehouseDetail;
   error?: string;
   isAdmin: boolean;
   isSaving: boolean;
-  onAcknowledge: () => void;
-  onNotifyCustomer: () => void;
+  onAcknowledge: (eventIds: number[]) => void;
+  onNotifyCustomer: (eventIds: number[]) => void;
 }) {
+  const [selectedEventIds, setSelectedEventIds] = useState<Set<number>>(
+    () => new Set(defaultSelectedEventIds),
+  );
+  const selectedIds = detail.sourceChangeEvents
+    .map((event) => event.id)
+    .filter((eventId) => selectedEventIds.has(eventId));
+  const allSelected =
+    detail.sourceChangeEvents.length > 0 &&
+    selectedIds.length === detail.sourceChangeEvents.length;
+
+  function toggleEvent(eventId: number) {
+    setSelectedEventIds((current) => {
+      const next = new Set(current);
+      if (next.has(eventId)) next.delete(eventId);
+      else next.add(eventId);
+      return next;
+    });
+  }
+
   return (
     <div className="sourceChangePanel">
       <div className="sourceChangePanelHeader">
@@ -5308,18 +5391,59 @@ function SourceChangeEventsPanel({
         </div>
         {isAdmin ? (
           <div className="sourceChangeActions">
-            <button type="button" disabled={isSaving} onClick={onNotifyCustomer}>
-              通知客户
+            <label className="sourceChangeSelectAll">
+              <input
+                checked={allSelected}
+                disabled={isSaving}
+                type="checkbox"
+                onChange={(event) =>
+                  setSelectedEventIds(
+                    event.currentTarget.checked
+                      ? new Set(detail.sourceChangeEvents.map((item) => item.id))
+                      : new Set(),
+                  )
+                }
+              />
+              全选
+            </label>
+            <button
+              type="button"
+              disabled={isSaving || !selectedIds.length}
+              onClick={() => onNotifyCustomer(selectedIds)}
+            >
+              通知客户{selectedIds.length ? ` (${selectedIds.length})` : ""}
             </button>
-            <button type="button" disabled={isSaving} onClick={onAcknowledge}>
-              标记已处理
+            <button
+              type="button"
+              disabled={isSaving || !selectedIds.length}
+              onClick={() => onAcknowledge(selectedIds)}
+            >
+              标记已处理{selectedIds.length ? ` (${selectedIds.length})` : ""}
             </button>
           </div>
         ) : null}
       </div>
       <div className="sourceChangeList">
         {detail.sourceChangeEvents.map((event) => (
-          <div className="sourceChangeItem" key={event.id}>
+          <div
+            className={[
+              "sourceChangeItem",
+              isAdmin ? "selectable" : "",
+              isAdmin && selectedEventIds.has(event.id) ? "selected" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            key={event.id}
+          >
+            {isAdmin ? (
+              <input
+                aria-label={`选择${event.fieldLabel}变动`}
+                checked={selectedEventIds.has(event.id)}
+                disabled={isSaving}
+                type="checkbox"
+                onChange={() => toggleEvent(event.id)}
+              />
+            ) : null}
             <span className="sourceChangeField">{event.fieldLabel}</span>
             <span className="sourceChangeValue old">
               {valueOrDash(event.oldValue)}
@@ -5830,18 +5954,34 @@ function getWarehouseDetailSourceChangeCount(detail: WarehouseDetail) {
   return detail.sourceChangeEvents.filter((event) => event.isUnread).length;
 }
 
+function isSourceChangeFieldVisible(
+  event: SourceChangeEvent,
+  settings: CustomerVisibilitySettings,
+) {
+  if (event.fieldName === "appointmentNumber") {
+    return settings.showAppointmentNumber;
+  }
+  if (event.fieldName === "deliveryDate") {
+    return settings.showDeliveryDate;
+  }
+  return true;
+}
+
 function getAppointmentDocumentUrl({
   appointment,
   container,
+  documentId,
   documentType,
   sourceOrderDetailId,
 }: {
   appointment: WarehouseAppointment;
   container: TableContainerRecord;
+  documentId: string;
   documentType: AppointmentDocumentType;
   sourceOrderDetailId: string;
 }) {
   const params = new URLSearchParams({
+    documentId,
     sourceOrderId: container.sourceOrderId,
     sourceOrderDetailId,
     sourceAppointmentLineId: appointment.sourceAppointmentLineId,
@@ -5851,12 +5991,28 @@ function getAppointmentDocumentUrl({
   return `/api/containers/documents?${params.toString()}`;
 }
 
-function getContainerBillUrl(container: TableContainerRecord) {
+function getContainerBillUrl(
+  container: TableContainerRecord,
+  documentId: string,
+) {
   const params = new URLSearchParams({
+    documentId,
     sourceOrderId: container.sourceOrderId,
   });
 
   return `/api/containers/bills?${params.toString()}`;
+}
+
+function validateDocumentFiles(files: File[]) {
+  if (!files.length) return "请选择文件";
+  if (files.length > 10) return "一次最多上传 10 个文件";
+
+  for (const file of files) {
+    const error = validateDocumentFile(file);
+    if (error) return `${file.name || "文件"}：${error}`;
+  }
+
+  return "";
 }
 
 function validateDocumentFile(file: File) {
@@ -6084,13 +6240,16 @@ function mergeAppointmentUpdate(
 function emptyAppointmentDocument(): AppointmentDocumentMeta {
   return {
     hasFile: false,
-    fileName: null,
-    mimeType: null,
-    fileSize: null,
-    uploadedAt: null,
-    downloadCount: 0,
-    lastDownloadedAt: null,
+    files: [],
   };
+}
+
+function appendDocumentFile(
+  document: AppointmentDocumentMeta,
+  file: AppointmentDocumentFileMeta,
+): AppointmentDocumentMeta {
+  const files = [...document.files.filter((item) => item.id !== file.id), file];
+  return { hasFile: files.length > 0, files };
 }
 
 function hasDateField(

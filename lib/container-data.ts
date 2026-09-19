@@ -98,6 +98,11 @@ export type AppointmentDocumentType = "pod" | "bol";
 
 export type AppointmentDocumentMeta = {
   hasFile: boolean;
+  files: AppointmentDocumentFileMeta[];
+};
+
+export type AppointmentDocumentFileMeta = {
+  id: string;
   fileName: string | null;
   mimeType: string | null;
   fileSize: number | null;
@@ -106,7 +111,7 @@ export type AppointmentDocumentMeta = {
   lastDownloadedAt: string | null;
 };
 
-export type AppointmentDocumentFile = AppointmentDocumentMeta & {
+export type AppointmentDocumentFile = AppointmentDocumentFileMeta & {
   data: Buffer;
 };
 
@@ -157,7 +162,7 @@ type ContainerRow = {
   appointments: DeliveryAppointmentRow[] | null;
   warehouse_details: WarehouseDetailRow[] | null;
   appointment_documents: AppointmentDocumentRow[] | null;
-  bill_document: ContainerBillDocumentRow | null;
+  bill_documents: ContainerBillDocumentRow[] | null;
 };
 
 type DeliveryAppointmentRow = {
@@ -219,6 +224,7 @@ type WarehouseAppointmentRow = {
 };
 
 type AppointmentDocumentRow = {
+  id: string | number;
   sourceOrderDetailId: string | null;
   sourceAppointmentLineId: string | null;
   documentType: AppointmentDocumentType | string | null;
@@ -232,6 +238,7 @@ type AppointmentDocumentRow = {
 };
 
 type ContainerBillDocumentRow = {
+  id: string | number;
   hasFile?: boolean | null;
   fileName: string | null;
   mimeType: string | null;
@@ -485,7 +492,7 @@ function warehouseDeliveryProgressFilterSql(
             exists (
               select 1
               from public.portal_warehouse_appointments pwa_progress
-              join public.portal_warehouse_appointment_documents pod_progress
+              join public.portal_warehouse_appointment_document_files pod_progress
                 on pod_progress.source_order_id = pwa_progress.source_order_id
                and pod_progress.source_order_detail_id = pwa_progress.source_order_detail_id
                and pod_progress.source_appointment_line_id = pwa_progress.source_appointment_line_id
@@ -562,6 +569,125 @@ async function ensureDocumentTrackingSchema() {
       alter table public.portal_container_bills
         add column if not exists download_count integer not null default 0,
         add column if not exists last_downloaded_at timestamptz;
+    `);
+
+    await client.query(`
+      create table if not exists public.portal_warehouse_appointment_document_files (
+        id bigserial primary key,
+        source_order_id text not null references public.portal_containers(source_order_id) on delete cascade,
+        source_order_detail_id text not null,
+        source_appointment_line_id text not null,
+        document_type text not null check (document_type in ('pod', 'bol')),
+        file_name text not null,
+        mime_type text not null,
+        file_size integer not null,
+        file_data bytea not null,
+        download_count integer not null default 0,
+        last_downloaded_at timestamptz,
+        migrated_from_legacy boolean not null default false,
+        uploaded_at timestamptz not null default now(),
+        updated_at timestamptz not null default now()
+      );
+      create index if not exists portal_warehouse_document_files_lookup_idx
+        on public.portal_warehouse_appointment_document_files(
+          source_order_id,
+          source_order_detail_id,
+          source_appointment_line_id,
+          document_type,
+          uploaded_at
+        );
+      create unique index if not exists portal_warehouse_document_files_legacy_idx
+        on public.portal_warehouse_appointment_document_files(
+          source_order_id,
+          source_order_detail_id,
+          source_appointment_line_id,
+          document_type
+        ) where migrated_from_legacy = true;
+
+      create table if not exists public.portal_container_bill_files (
+        id bigserial primary key,
+        source_order_id text not null references public.portal_containers(source_order_id) on delete cascade,
+        file_name text not null,
+        mime_type text not null,
+        file_size integer not null,
+        file_data bytea not null,
+        download_count integer not null default 0,
+        last_downloaded_at timestamptz,
+        migrated_from_legacy boolean not null default false,
+        uploaded_at timestamptz not null default now(),
+        updated_at timestamptz not null default now()
+      );
+      create index if not exists portal_container_bill_files_lookup_idx
+        on public.portal_container_bill_files(source_order_id, uploaded_at);
+      create unique index if not exists portal_container_bill_files_legacy_idx
+        on public.portal_container_bill_files(source_order_id)
+        where migrated_from_legacy = true;
+    `);
+
+    await client.query(`
+      insert into public.portal_warehouse_appointment_document_files (
+        source_order_id,
+        source_order_detail_id,
+        source_appointment_line_id,
+        document_type,
+        file_name,
+        mime_type,
+        file_size,
+        file_data,
+        download_count,
+        last_downloaded_at,
+        migrated_from_legacy,
+        uploaded_at,
+        updated_at
+      )
+      select
+        source_order_id,
+        source_order_detail_id,
+        source_appointment_line_id,
+        document_type,
+        file_name,
+        mime_type,
+        file_size,
+        file_data,
+        download_count,
+        last_downloaded_at,
+        true,
+        uploaded_at,
+        updated_at
+      from public.portal_warehouse_appointment_documents
+      on conflict (
+        source_order_id,
+        source_order_detail_id,
+        source_appointment_line_id,
+        document_type
+      ) where migrated_from_legacy = true do nothing;
+
+      insert into public.portal_container_bill_files (
+        source_order_id,
+        file_name,
+        mime_type,
+        file_size,
+        file_data,
+        download_count,
+        last_downloaded_at,
+        migrated_from_legacy,
+        uploaded_at,
+        updated_at
+      )
+      select
+        source_order_id,
+        file_name,
+        mime_type,
+        file_size,
+        file_data,
+        download_count,
+        last_downloaded_at,
+        true,
+        uploaded_at,
+        updated_at
+      from public.portal_container_bills
+      on conflict (source_order_id)
+        where migrated_from_legacy = true do nothing;
     `);
   }).catch((error) => {
     documentTrackingSchemaPromise = null;
@@ -1069,7 +1195,7 @@ export async function getContainers({
           coalesce(appointment_points.appointments, '[]'::jsonb) as appointments,
           coalesce(warehouse_detail_points.warehouse_details, '[]'::jsonb) as warehouse_details,
           coalesce(document_points.appointment_documents, '[]'::jsonb) as appointment_documents,
-          bill_document.bill_document as bill_document
+          bill_document.bill_documents as bill_documents
         from public.portal_containers pc
         left join public.portal_customers c
           on c.source_customer_id = pc.source_customer_id
@@ -1148,6 +1274,7 @@ export async function getContainers({
         left join lateral (
           select jsonb_agg(
             jsonb_build_object(
+              'id', pwd_doc.id,
               'sourceOrderDetailId', pwd_doc.source_order_detail_id,
               'sourceAppointmentLineId', pwd_doc.source_appointment_line_id,
               'documentType', pwd_doc.document_type,
@@ -1164,20 +1291,27 @@ export async function getContainers({
               pwd_doc.source_appointment_line_id asc,
               pwd_doc.document_type asc
           ) as appointment_documents
-          from public.portal_warehouse_appointment_documents pwd_doc
+          from public.portal_warehouse_appointment_document_files pwd_doc
           where pwd_doc.source_order_id = pc.source_order_id
         ) document_points on true
         left join lateral (
-          select jsonb_build_object(
-            'hasFile', pcb.file_data is not null,
-            'fileName', pcb.file_name,
-            'mimeType', pcb.mime_type,
-            'fileSize', pcb.file_size,
-            'uploadedAt', pcb.uploaded_at,
-            'downloadCount', pcb.download_count,
-            'lastDownloadedAt', pcb.last_downloaded_at
-          ) as bill_document
-          from public.portal_container_bills pcb
+          select coalesce(
+            jsonb_agg(
+              jsonb_build_object(
+                'id', pcb.id,
+                'hasFile', pcb.file_data is not null,
+                'fileName', pcb.file_name,
+                'mimeType', pcb.mime_type,
+                'fileSize', pcb.file_size,
+                'uploadedAt', pcb.uploaded_at,
+                'downloadCount', pcb.download_count,
+                'lastDownloadedAt', pcb.last_downloaded_at
+              )
+              order by pcb.uploaded_at asc, pcb.id asc
+            ),
+            '[]'::jsonb
+          ) as bill_documents
+          from public.portal_container_bill_files pcb
           where pcb.source_order_id = pc.source_order_id
         ) bill_document on true
         ${dataWhereClause}
@@ -1691,11 +1825,12 @@ export async function saveWarehouseAppointmentDocument({
   mimeType: string;
   fileSize: number;
   data: Buffer;
-}): Promise<AppointmentDocumentMeta | null> {
+}): Promise<AppointmentDocumentFileMeta | null> {
   await ensureDocumentTrackingSchema();
 
   return withAppTransaction(async (client) => {
     const result = await client.query<{
+      id: string | number;
       hasFile: boolean;
       fileName: string | null;
       mimeType: string | null;
@@ -1705,7 +1840,7 @@ export async function saveWarehouseAppointmentDocument({
       lastDownloadedAt: Date | string | null;
     }>(
       `
-        insert into public.portal_warehouse_appointment_documents (
+        insert into public.portal_warehouse_appointment_document_files (
           source_order_id,
           source_order_detail_id,
           source_appointment_line_id,
@@ -1744,22 +1879,8 @@ export async function saveWarehouseAppointmentDocument({
             and pc.source_customer_id = $9
             and pc.source_active = true
         )
-        on conflict (
-          source_order_id,
-          source_order_detail_id,
-          source_appointment_line_id,
-          document_type
-        )
-        do update set
-          file_name = excluded.file_name,
-          mime_type = excluded.mime_type,
-          file_size = excluded.file_size,
-          file_data = excluded.file_data,
-          download_count = 0,
-          last_downloaded_at = null,
-          uploaded_at = now(),
-          updated_at = now()
         returning
+          id,
           true as "hasFile",
           file_name as "fileName",
           mime_type as "mimeType",
@@ -1784,7 +1905,8 @@ export async function saveWarehouseAppointmentDocument({
 
     if (!document) return null;
 
-    return toAppointmentDocumentMeta({
+    return toAppointmentDocumentFileMeta({
+      id: document.id,
       sourceOrderDetailId,
       sourceAppointmentLineId,
       documentType,
@@ -1801,6 +1923,7 @@ export async function saveWarehouseAppointmentDocument({
 
 export async function getWarehouseAppointmentDocument({
   customerId,
+  documentId,
   sourceOrderId,
   sourceOrderDetailId,
   sourceAppointmentLineId,
@@ -1808,6 +1931,7 @@ export async function getWarehouseAppointmentDocument({
   requireSourcePickup = false,
 }: {
   customerId: string;
+  documentId: string;
   sourceOrderId: string;
   sourceOrderDetailId: string;
   sourceAppointmentLineId: string;
@@ -1818,6 +1942,7 @@ export async function getWarehouseAppointmentDocument({
 
   return withAppReadOnlyTransaction(async (client) => {
     const result = await client.query<{
+      id: string | number;
       fileName: string | null;
       mimeType: string | null;
       fileSize: string | number | null;
@@ -1828,6 +1953,7 @@ export async function getWarehouseAppointmentDocument({
     }>(
       `
         select
+          pwd.id,
           pwd.file_name as "fileName",
           pwd.mime_type as "mimeType",
           pwd.file_size as "fileSize",
@@ -1835,7 +1961,7 @@ export async function getWarehouseAppointmentDocument({
           pwd.download_count as "downloadCount",
           pwd.last_downloaded_at as "lastDownloadedAt",
           pwd.file_data as data
-        from public.portal_warehouse_appointment_documents pwd
+        from public.portal_warehouse_appointment_document_files pwd
         join public.portal_containers pc
           on pc.source_order_id = pwd.source_order_id
         join public.portal_warehouse_appointments pwa
@@ -1843,16 +1969,18 @@ export async function getWarehouseAppointmentDocument({
          and pwa.source_order_detail_id = pwd.source_order_detail_id
          and pwa.source_appointment_line_id = pwd.source_appointment_line_id
          and pwa.source_active = true
-        where pwd.source_order_id = $1
-          and pwd.source_order_detail_id = $2
-          and pwd.source_appointment_line_id = $3
-          and pwd.document_type = $4
-          and pc.source_customer_id = $5
+        where pwd.id = $1::bigint
+          and pwd.source_order_id = $2
+          and pwd.source_order_detail_id = $3
+          and pwd.source_appointment_line_id = $4
+          and pwd.document_type = $5
+          and pc.source_customer_id = $6
           and pc.source_active = true
-          and (not $6::boolean or pc.source_pickup_date is not null)
+          and (not $7::boolean or pc.source_pickup_date is not null)
         limit 1
       `,
       [
+        documentId,
         sourceOrderId,
         sourceOrderDetailId,
         sourceAppointmentLineId,
@@ -1866,7 +1994,7 @@ export async function getWarehouseAppointmentDocument({
     if (!document) return null;
 
     return {
-      hasFile: true,
+      id: String(document.id),
       fileName: document.fileName,
       mimeType: document.mimeType,
       fileSize: toNullableNumber(document.fileSize),
@@ -1880,12 +2008,14 @@ export async function getWarehouseAppointmentDocument({
 
 export async function recordWarehouseAppointmentDocumentDownload({
   customerId,
+  documentId,
   sourceOrderId,
   sourceOrderDetailId,
   sourceAppointmentLineId,
   documentType,
 }: {
   customerId: string;
+  documentId: string;
   sourceOrderId: string;
   sourceOrderDetailId: string;
   sourceAppointmentLineId: string;
@@ -1896,25 +2026,27 @@ export async function recordWarehouseAppointmentDocumentDownload({
   await withAppTransaction(async (client) => {
     await client.query(
       `
-        update public.portal_warehouse_appointment_documents pwd
+        update public.portal_warehouse_appointment_document_files pwd
         set download_count = pwd.download_count + 1,
             last_downloaded_at = now(),
             updated_at = now()
         from public.portal_containers pc
         join public.portal_warehouse_appointments pwa
           on pwa.source_order_id = pc.source_order_id
-         and pwa.source_order_detail_id = $2
-         and pwa.source_appointment_line_id = $3
+         and pwa.source_order_detail_id = $3
+         and pwa.source_appointment_line_id = $4
          and pwa.source_active = true
         where pwd.source_order_id = pc.source_order_id
-          and pwd.source_order_id = $1
-          and pwd.source_order_detail_id = $2
-          and pwd.source_appointment_line_id = $3
-          and pwd.document_type = $4
-          and pc.source_customer_id = $5
+          and pwd.id = $1::bigint
+          and pwd.source_order_id = $2
+          and pwd.source_order_detail_id = $3
+          and pwd.source_appointment_line_id = $4
+          and pwd.document_type = $5
+          and pc.source_customer_id = $6
           and pc.source_active = true
       `,
       [
+        documentId,
         sourceOrderId,
         sourceOrderDetailId,
         sourceAppointmentLineId,
@@ -1939,13 +2071,13 @@ export async function saveContainerBillDocument({
   mimeType: string;
   fileSize: number;
   data: Buffer;
-}): Promise<AppointmentDocumentMeta | null> {
+}): Promise<AppointmentDocumentFileMeta | null> {
   await ensureDocumentTrackingSchema();
 
   return withAppTransaction(async (client) => {
     const result = await client.query<ContainerBillDocumentRow>(
       `
-        insert into public.portal_container_bills (
+        insert into public.portal_container_bill_files (
           source_order_id,
           file_name,
           mime_type,
@@ -1973,17 +2105,8 @@ export async function saveContainerBillDocument({
             and pc.source_customer_id = $6
             and pc.source_active = true
         )
-        on conflict (source_order_id)
-        do update set
-          file_name = excluded.file_name,
-          mime_type = excluded.mime_type,
-          file_size = excluded.file_size,
-          file_data = excluded.file_data,
-          download_count = 0,
-          last_downloaded_at = null,
-          uploaded_at = now(),
-          updated_at = now()
         returning
+          id,
           true as "hasFile",
           file_name as "fileName",
           mime_type as "mimeType",
@@ -1998,16 +2121,18 @@ export async function saveContainerBillDocument({
 
     if (!document) return null;
 
-    return toContainerBillDocumentMeta(document);
+    return toContainerBillDocumentFileMeta(document);
   });
 }
 
 export async function getContainerBillDocument({
   customerId,
+  documentId,
   sourceOrderId,
   requireSourcePickup = false,
 }: {
   customerId: string;
+  documentId: string;
   sourceOrderId: string;
   requireSourcePickup?: boolean;
 }): Promise<AppointmentDocumentFile | null> {
@@ -2019,6 +2144,7 @@ export async function getContainerBillDocument({
     >(
       `
         select
+          pcb.id,
           true as "hasFile",
           pcb.file_name as "fileName",
           pcb.mime_type as "mimeType",
@@ -2027,24 +2153,24 @@ export async function getContainerBillDocument({
           pcb.download_count as "downloadCount",
           pcb.last_downloaded_at as "lastDownloadedAt",
           pcb.file_data as data
-        from public.portal_container_bills pcb
+        from public.portal_container_bill_files pcb
         join public.portal_containers pc
           on pc.source_order_id = pcb.source_order_id
-        where pcb.source_order_id = $1
-          and pc.source_customer_id = $2
+        where pcb.id = $1::bigint
+          and pcb.source_order_id = $2
+          and pc.source_customer_id = $3
           and pc.source_active = true
-          and (not $3::boolean or pc.source_pickup_date is not null)
+          and (not $4::boolean or pc.source_pickup_date is not null)
         limit 1
       `,
-      [sourceOrderId, customerId, requireSourcePickup],
+      [documentId, sourceOrderId, customerId, requireSourcePickup],
     );
     const document = rows(result)[0];
 
     if (!document) return null;
 
     return {
-      ...toContainerBillDocumentMeta(document),
-      hasFile: true,
+      ...toContainerBillDocumentFileMeta(document),
       data: document.data,
     };
   });
@@ -2052,9 +2178,11 @@ export async function getContainerBillDocument({
 
 export async function recordContainerBillDocumentDownload({
   customerId,
+  documentId,
   sourceOrderId,
 }: {
   customerId: string;
+  documentId: string;
   sourceOrderId: string;
 }) {
   await ensureDocumentTrackingSchema();
@@ -2062,17 +2190,18 @@ export async function recordContainerBillDocumentDownload({
   await withAppTransaction(async (client) => {
     await client.query(
       `
-        update public.portal_container_bills pcb
+        update public.portal_container_bill_files pcb
         set download_count = pcb.download_count + 1,
             last_downloaded_at = now(),
             updated_at = now()
         from public.portal_containers pc
         where pcb.source_order_id = pc.source_order_id
-          and pcb.source_order_id = $1
-          and pc.source_customer_id = $2
+          and pcb.id = $1::bigint
+          and pcb.source_order_id = $2
+          and pc.source_customer_id = $3
           and pc.source_active = true
       `,
-      [sourceOrderId, customerId],
+      [documentId, sourceOrderId, customerId],
     );
   });
 }
@@ -2232,7 +2361,7 @@ export async function getSourceContainers({
           appointment_points.appointments,
           null::jsonb as warehouse_details,
           null::jsonb as appointment_documents,
-          null::jsonb as bill_document
+          null::jsonb as bill_documents
         ${baseFrom}
           ${dataWhereClause}
         order by
@@ -2312,7 +2441,7 @@ function toContainerRecord(
     warehouseDetails: deliveryDetailsRestricted ? [] : warehouseDetails,
     billDocument: deliveryDetailsRestricted
       ? emptyAppointmentDocument()
-      : toContainerBillDocumentMeta(row.bill_document),
+      : toContainerBillDocumentMeta(row.bill_documents ?? []),
   };
 }
 
@@ -2392,7 +2521,7 @@ function toWarehouseAppointment(
 }
 
 function buildAppointmentDocumentMap(documents: AppointmentDocumentRow[]) {
-  const documentMap = new Map<string, AppointmentDocumentMeta>();
+  const documentMap = new Map<string, AppointmentDocumentFileMeta[]>();
 
   for (const document of documents) {
     if (
@@ -2403,14 +2532,14 @@ function buildAppointmentDocumentMap(documents: AppointmentDocumentRow[]) {
       continue;
     }
 
-    documentMap.set(
-      getAppointmentDocumentMapKey(
-        document.sourceOrderDetailId,
-        document.sourceAppointmentLineId,
-        document.documentType,
-      ),
-      toAppointmentDocumentMeta(document),
+    const key = getAppointmentDocumentMapKey(
+      document.sourceOrderDetailId,
+      document.sourceAppointmentLineId,
+      document.documentType,
     );
+    const current = documentMap.get(key) ?? [];
+    current.push(toAppointmentDocumentFileMeta(document));
+    documentMap.set(key, current);
   }
 
   return documentMap;
@@ -2419,7 +2548,7 @@ function buildAppointmentDocumentMap(documents: AppointmentDocumentRow[]) {
 function buildWarehouseDetails(
   details: WarehouseDetail[],
   appointments: DeliveryAppointment[],
-  documentMap: Map<string, AppointmentDocumentMeta>,
+  documentMap: Map<string, AppointmentDocumentFileMeta[]>,
   {
     showAllWarehouseAppointments = false,
     pickupDate = null,
@@ -2562,27 +2691,29 @@ function buildWarehouseDetails(
 function attachAppointmentDocuments(
   sourceOrderDetailId: string,
   appointment: WarehouseAppointment,
-  documentMap: Map<string, AppointmentDocumentMeta>,
+  documentMap: Map<string, AppointmentDocumentFileMeta[]>,
 ): WarehouseAppointment {
   return {
     ...appointment,
     sourceOrderDetailId,
-    podDocument:
+    podDocument: toDocumentCollection(
       documentMap.get(
         getAppointmentDocumentMapKey(
           sourceOrderDetailId,
           appointment.sourceAppointmentLineId,
           "pod",
         ),
-      ) ?? emptyAppointmentDocument(),
-    bolDocument:
+      ) ?? [],
+    ),
+    bolDocument: toDocumentCollection(
       documentMap.get(
         getAppointmentDocumentMapKey(
           sourceOrderDetailId,
           appointment.sourceAppointmentLineId,
           "bol",
         ),
-      ) ?? emptyAppointmentDocument(),
+      ) ?? [],
+    ),
   };
 }
 
@@ -2644,11 +2775,11 @@ function legacyAppointmentToWarehouseAppointment(
   };
 }
 
-function toAppointmentDocumentMeta(
+function toAppointmentDocumentFileMeta(
   document: AppointmentDocumentRow,
-): AppointmentDocumentMeta {
+): AppointmentDocumentFileMeta {
   return {
-    hasFile: Boolean(document.hasFile),
+    id: String(document.id),
     fileName: document.fileName,
     mimeType: document.mimeType,
     fileSize: toNullableNumber(document.fileSize),
@@ -2661,28 +2792,36 @@ function toAppointmentDocumentMeta(
 function emptyAppointmentDocument(): AppointmentDocumentMeta {
   return {
     hasFile: false,
-    fileName: null,
-    mimeType: null,
-    fileSize: null,
-    uploadedAt: null,
-    downloadCount: 0,
-    lastDownloadedAt: null,
+    files: [],
   };
 }
 
 function toContainerBillDocumentMeta(
-  document: ContainerBillDocumentRow | null | undefined,
+  documents: ContainerBillDocumentRow[],
 ): AppointmentDocumentMeta {
-  if (!document?.hasFile) return emptyAppointmentDocument();
+  return toDocumentCollection(documents.map(toContainerBillDocumentFileMeta));
+}
 
+function toContainerBillDocumentFileMeta(
+  document: ContainerBillDocumentRow,
+): AppointmentDocumentFileMeta {
   return {
-    hasFile: true,
+    id: String(document.id),
     fileName: document.fileName,
     mimeType: document.mimeType,
     fileSize: toNullableNumber(document.fileSize),
     uploadedAt: formatDateTime(document.uploadedAt),
     downloadCount: toNullableNumber(document.downloadCount ?? null) ?? 0,
     lastDownloadedAt: formatDateTime(document.lastDownloadedAt ?? null),
+  };
+}
+
+function toDocumentCollection(
+  files: AppointmentDocumentFileMeta[],
+): AppointmentDocumentMeta {
+  return {
+    hasFile: files.length > 0,
+    files,
   };
 }
 

@@ -2047,6 +2047,26 @@ body.rowDragActive * {
   justify-content: flex-end;
 }
 
+.sourceChangeSelectAll {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.sourceChangeSelectAll input,
+.sourceChangeItem > input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: #b42318;
+}
+
 .sourceChangeActions button {
   min-height: 30px;
   border: 1px solid #fecaca;
@@ -2085,6 +2105,15 @@ body.rowDragActive * {
   font-size: 12px;
   font-weight: 750;
   padding: 7px 9px;
+}
+
+.sourceChangeItem.selectable {
+  grid-template-columns: 18px minmax(76px, 0.7fr) minmax(120px, 1fr) 18px minmax(120px, 1fr) minmax(96px, max-content);
+}
+
+.sourceChangeItem.selected {
+  border-color: #fca5a5;
+  background: #fff7f7;
 }
 
 .sourceChangeField {
@@ -2258,10 +2287,61 @@ body.rowDragActive * {
   flex-wrap: wrap;
 }
 
+.documentMenu {
+  position: relative;
+}
+
+.documentMenu > summary {
+  list-style: none;
+}
+
+.documentMenu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.documentMenuList {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 5px);
+  left: 0;
+  width: min(290px, 70vw);
+  display: grid;
+  gap: 5px;
+  border: 1px solid #d3e1f1;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.16);
+  padding: 7px;
+}
+
+.billDocumentCell .documentMenuList {
+  right: 0;
+  left: auto;
+}
+
+.documentMenuItem {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.documentMenuItem .documentViewLink {
+  min-width: 0;
+  flex: 1;
+  justify-content: flex-start;
+}
+
+.documentMenuItem .documentViewLink span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .billDocumentCell {
   flex-wrap: nowrap;
   gap: 5px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .documentViewLink,

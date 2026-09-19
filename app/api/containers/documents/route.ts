@@ -20,6 +20,7 @@ export async function GET(request: NextRequest) {
   }
 
   const params = request.nextUrl.searchParams;
+  const documentId = parseDocumentId(params.get("documentId"));
   const payload = parseDocumentParams({
     sourceOrderId: params.get("sourceOrderId"),
     sourceOrderDetailId: params.get("sourceOrderDetailId"),
@@ -27,7 +28,7 @@ export async function GET(request: NextRequest) {
     documentType: params.get("documentType"),
   });
 
-  if (!payload) {
+  if (!payload || !documentId) {
     return NextResponse.json({ error: "文件参数不正确" }, { status: 400 });
   }
 
@@ -38,6 +39,7 @@ export async function GET(request: NextRequest) {
         : await getCustomerVisibilitySettings(customer.id);
     const document = await getWarehouseAppointmentDocument({
       customerId: customer.id,
+      documentId,
       requireSourcePickup:
         settings?.revealDeliveryDetailsAfterPickup ?? false,
       ...payload,
@@ -50,6 +52,7 @@ export async function GET(request: NextRequest) {
     if (customer.role !== "admin") {
       await recordWarehouseAppointmentDocumentDownload({
         customerId: customer.id,
+        documentId,
         ...payload,
       });
     }
@@ -182,6 +185,11 @@ function parseDocumentParams(value: {
 
 function getStringValue(value: FormDataEntryValue | string | null) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function parseDocumentId(value: string | null) {
+  const documentId = value?.trim() ?? "";
+  return /^\d+$/.test(documentId) && documentId !== "0" ? documentId : null;
 }
 
 function isFormFile(value: FormDataEntryValue | null): value is File {
