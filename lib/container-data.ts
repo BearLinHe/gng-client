@@ -2426,7 +2426,9 @@ function toContainerRecord(
     pickupDate: restrictDeliveryDetailsUntilSourcePickup
       ? sourcePickupDate
       : formatDate(row.pickup_date),
-    unloadDate: formatDate(row.unload_date),
+    unloadDate: deliveryDetailsRestricted
+      ? null
+      : formatDate(row.unload_date),
     deliveryDetailsRestricted,
     operationMode: deliveryDetailsRestricted ? null : row.operation_mode,
     operationModeLabel: deliveryDetailsRestricted
