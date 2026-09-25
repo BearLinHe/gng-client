@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { readCustomerSession } from "@/lib/auth";
 import {
+  deleteContainerBillDocument,
   getContainerBillDocument,
   recordContainerBillDocumentDownload,
   saveContainerBillDocument,
@@ -136,6 +137,46 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error(error);
     return NextResponse.json({ error: "上传账单失败" }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  const customer = readCustomerSession(request);
+  if (!customer) {
+    return NextResponse.json({ error: "请先登录" }, { status: 401 });
+  }
+  if (customer.role !== "admin") {
+    return NextResponse.json(
+      { error: "客户账号只读，无法删除账单" },
+      { status: 403 },
+    );
+  }
+
+  const sourceOrderId = request.nextUrl.searchParams
+    .get("sourceOrderId")
+    ?.trim();
+  const documentId = parseDocumentId(
+    request.nextUrl.searchParams.get("documentId"),
+  );
+  if (!sourceOrderId || !documentId) {
+    return NextResponse.json({ error: "账单参数不正确" }, { status: 400 });
+  }
+
+  try {
+    const deleted = await deleteContainerBillDocument({
+      customerId: customer.id,
+      documentId,
+      sourceOrderId,
+    });
+
+    if (!deleted) {
+      return NextResponse.json({ error: "账单不存在" }, { status: 404 });
+    }
+
+    return NextResponse.json({ deleted: true });
+  } catch (error) {
+    console.error(error);
+    return NextResponse.json({ error: "删除账单失败" }, { status: 500 });
   }
 }
 

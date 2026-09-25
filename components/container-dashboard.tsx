@@ -20,6 +20,7 @@ import {
   RotateCcw,
   Search,
   Settings,
+  Trash2,
   Upload,
   UserRound,
   UsersRound,
@@ -354,6 +355,9 @@ export default function ContainerDashboard() {
   const [containerBillErrors, setContainerBillErrors] = useState<
     Record<string, string>
   >({});
+  const [deletingDocumentIds, setDeletingDocumentIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [savingSourceChangeEvents, setSavingSourceChangeEvents] = useState<
     Set<number>
   >(() => new Set());
@@ -2326,6 +2330,143 @@ export default function ContainerDashboard() {
     );
   }
 
+  async function deleteAppointmentDocument({
+    container,
+    warehouseDetail,
+    appointment,
+    documentType,
+    document,
+  }: {
+    container: TableContainerRecord;
+    warehouseDetail: WarehouseDetail;
+    appointment: WarehouseAppointment;
+    documentType: AppointmentDocumentType;
+    document: AppointmentDocumentFileMeta;
+  }) {
+    const sourceOrderDetailId =
+      appointment.sourceOrderDetailId || warehouseDetail.sourceOrderDetailId;
+    const key = getAppointmentDocumentKey(
+      container.rowId,
+      sourceOrderDetailId,
+      appointment.sourceAppointmentLineId,
+      documentType,
+    );
+    if (savingAppointmentDocumentKeysRef.current.has(key)) return;
+
+    const fileLabel = document.fileName?.trim() || documentType.toUpperCase();
+    if (!window.confirm(`确定删除“${fileLabel}”吗？删除后无法恢复。`)) {
+      return;
+    }
+
+    if (mockLongTable) {
+      applyDeletedAppointmentDocument(
+        container,
+        sourceOrderDetailId,
+        appointment.sourceAppointmentLineId,
+        documentType,
+        document.id,
+      );
+      return;
+    }
+
+    const deletingKey = getDeletingDocumentKey("appointment", document.id);
+    markAppointmentDocumentSaving(key);
+    setDeletingDocumentIds((current) => new Set(current).add(deletingKey));
+    setAppointmentDocumentErrors((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+
+    try {
+      const response = await fetch(
+        getAppointmentDocumentUrl({
+          appointment,
+          container,
+          documentId: document.id,
+          documentType,
+          sourceOrderDetailId,
+        }),
+        { method: "DELETE" },
+      );
+      const payload = (await response.json()) as {
+        deleted?: boolean;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.deleted) {
+        throw new Error(payload.error ?? "删除文件失败");
+      }
+
+      applyDeletedAppointmentDocument(
+        container,
+        sourceOrderDetailId,
+        appointment.sourceAppointmentLineId,
+        documentType,
+        document.id,
+      );
+    } catch (deleteError) {
+      setAppointmentDocumentErrors((current) => ({
+        ...current,
+        [key]:
+          deleteError instanceof Error ? deleteError.message : "删除文件失败",
+      }));
+    } finally {
+      clearAppointmentDocumentSaving(key);
+      setDeletingDocumentIds((current) => {
+        const next = new Set(current);
+        next.delete(deletingKey);
+        return next;
+      });
+    }
+  }
+
+  function applyDeletedAppointmentDocument(
+    original: TableContainerRecord,
+    sourceOrderDetailId: string,
+    sourceAppointmentLineId: string,
+    documentType: AppointmentDocumentType,
+    documentId: string,
+  ) {
+    setContainers((current) =>
+      current.map((row) =>
+        row.rowId === original.rowId
+          ? {
+              ...row,
+              warehouseDetails: row.warehouseDetails.map((detail) =>
+                detail.sourceOrderDetailId === sourceOrderDetailId ||
+                detail.appointments.some(
+                  (appointment) =>
+                    appointment.sourceAppointmentLineId ===
+                    sourceAppointmentLineId,
+                )
+                  ? {
+                      ...detail,
+                      appointments: detail.appointments.map((appointment) =>
+                        appointment.sourceAppointmentLineId ===
+                        sourceAppointmentLineId
+                          ? {
+                              ...appointment,
+                              [documentType === "pod"
+                                ? "podDocument"
+                                : "bolDocument"]: removeDocumentFile(
+                                documentType === "pod"
+                                  ? appointment.podDocument
+                                  : appointment.bolDocument,
+                                documentId,
+                              ),
+                            }
+                          : appointment,
+                      ),
+                    }
+                  : detail,
+              ),
+            }
+          : row,
+      ),
+    );
+  }
+
   async function uploadContainerBill({
     container,
     files,
@@ -2409,6 +2550,79 @@ export default function ContainerDashboard() {
           ? {
               ...row,
               billDocument: appendDocumentFile(row.billDocument, document),
+            }
+          : row,
+      ),
+    );
+  }
+
+  async function deleteContainerBill(
+    container: TableContainerRecord,
+    document: AppointmentDocumentFileMeta,
+  ) {
+    const key = getContainerBillKey(container.rowId);
+    if (savingContainerBillKeysRef.current.has(key)) return;
+
+    const fileLabel = document.fileName?.trim() || "账单";
+    if (!window.confirm(`确定删除“${fileLabel}”吗？删除后无法恢复。`)) {
+      return;
+    }
+
+    if (mockLongTable) {
+      applyDeletedContainerBill(container, document.id);
+      return;
+    }
+
+    const deletingKey = getDeletingDocumentKey("bill", document.id);
+    markContainerBillSaving(key);
+    setDeletingDocumentIds((current) => new Set(current).add(deletingKey));
+    setContainerBillErrors((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+
+    try {
+      const response = await fetch(
+        getContainerBillUrl(container, document.id),
+        { method: "DELETE" },
+      );
+      const payload = (await response.json()) as {
+        deleted?: boolean;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.deleted) {
+        throw new Error(payload.error ?? "删除账单失败");
+      }
+
+      applyDeletedContainerBill(container, document.id);
+    } catch (deleteError) {
+      setContainerBillErrors((current) => ({
+        ...current,
+        [key]:
+          deleteError instanceof Error ? deleteError.message : "删除账单失败",
+      }));
+    } finally {
+      clearContainerBillSaving(key);
+      setDeletingDocumentIds((current) => {
+        const next = new Set(current);
+        next.delete(deletingKey);
+        return next;
+      });
+    }
+  }
+
+  function applyDeletedContainerBill(
+    original: TableContainerRecord,
+    documentId: string,
+  ) {
+    setContainers((current) =>
+      current.map((row) =>
+        row.rowId === original.rowId
+          ? {
+              ...row,
+              billDocument: removeDocumentFile(row.billDocument, documentId),
             }
           : row,
       ),
@@ -2830,9 +3044,15 @@ export default function ContainerDashboard() {
               document={row.original.billDocument}
               error={containerBillErrors[getContainerBillKey(row.original.rowId)]}
               isAdmin={isAdmin}
-              isUploading={savingContainerBills.has(
+              isBusy={savingContainerBills.has(
                 getContainerBillKey(row.original.rowId),
               )}
+              isDeletingFile={(file) =>
+                deletingDocumentIds.has(
+                  getDeletingDocumentKey("bill", file.id),
+                )
+              }
+              onDelete={(file) => deleteContainerBill(row.original, file)}
               onUpload={(files) =>
                 uploadContainerBill({
                   container: row.original,
@@ -3187,6 +3407,7 @@ export default function ContainerDashboard() {
     setContainerBillErrors({});
     setSavingContainerBills(new Set());
     savingContainerBillKeysRef.current.clear();
+    setDeletingDocumentIds(new Set());
     setEditingWarehouseDetailCell(null);
     setWarehouseDetailDraft("");
     setWarehouseDetailCellErrors({});
@@ -4485,7 +4706,7 @@ export default function ContainerDashboard() {
                                                             ]
                                                           }
                                                           isAdmin={isAdmin}
-                                                          isUploading={savingAppointmentDocuments.has(
+                                                          isBusy={savingAppointmentDocuments.has(
                                                             getAppointmentDocumentKey(
                                                               container.rowId,
                                                               getAppointmentSourceDetailId(
@@ -4496,10 +4717,31 @@ export default function ContainerDashboard() {
                                                               "pod",
                                                             ),
                                                           )}
+                                                          isDeletingFile={(file) =>
+                                                            deletingDocumentIds.has(
+                                                              getDeletingDocumentKey(
+                                                                "appointment",
+                                                                file.id,
+                                                              ),
+                                                            )
+                                                          }
                                                           sourceOrderDetailId={getAppointmentSourceDetailId(
                                                             appointment,
                                                             detail,
                                                           )}
+                                                          onDelete={(document) =>
+                                                            deleteAppointmentDocument(
+                                                              {
+                                                                container,
+                                                                warehouseDetail:
+                                                                  detail,
+                                                                appointment,
+                                                                documentType:
+                                                                  "pod",
+                                                                document,
+                                                              },
+                                                            )
+                                                          }
                                                           onUpload={(files) =>
                                                             uploadAppointmentDocument(
                                                               {
@@ -4541,7 +4783,7 @@ export default function ContainerDashboard() {
                                                             ]
                                                           }
                                                           isAdmin={isAdmin}
-                                                          isUploading={savingAppointmentDocuments.has(
+                                                          isBusy={savingAppointmentDocuments.has(
                                                             getAppointmentDocumentKey(
                                                               container.rowId,
                                                               getAppointmentSourceDetailId(
@@ -4552,10 +4794,31 @@ export default function ContainerDashboard() {
                                                               "bol",
                                                             ),
                                                           )}
+                                                          isDeletingFile={(file) =>
+                                                            deletingDocumentIds.has(
+                                                              getDeletingDocumentKey(
+                                                                "appointment",
+                                                                file.id,
+                                                              ),
+                                                            )
+                                                          }
                                                           sourceOrderDetailId={getAppointmentSourceDetailId(
                                                             appointment,
                                                             detail,
                                                           )}
+                                                          onDelete={(document) =>
+                                                            deleteAppointmentDocument(
+                                                              {
+                                                                container,
+                                                                warehouseDetail:
+                                                                  detail,
+                                                                appointment,
+                                                                documentType:
+                                                                  "bol",
+                                                                document,
+                                                              },
+                                                            )
+                                                          }
                                                           onUpload={(files) =>
                                                             uploadAppointmentDocument(
                                                               {
@@ -4961,7 +5224,9 @@ function AppointmentDocumentCell({
   documentType,
   error,
   isAdmin,
-  isUploading,
+  isBusy,
+  isDeletingFile,
+  onDelete,
   onUpload,
   sourceOrderDetailId,
 }: {
@@ -4971,7 +5236,9 @@ function AppointmentDocumentCell({
   documentType: AppointmentDocumentType;
   error?: string;
   isAdmin: boolean;
-  isUploading: boolean;
+  isBusy: boolean;
+  isDeletingFile: (file: AppointmentDocumentFileMeta) => boolean;
+  onDelete: (file: AppointmentDocumentFileMeta) => void;
   onUpload: (files: File[]) => void;
   sourceOrderDetailId: string;
 }) {
@@ -4998,8 +5265,10 @@ function AppointmentDocumentCell({
         })
       }
       isAdmin={isAdmin}
-      isUploading={isUploading}
+      isBusy={isBusy}
+      isDeletingFile={isDeletingFile}
       label={label}
+      onDelete={onDelete}
       onUpload={onUpload}
     />
   );
@@ -5010,14 +5279,18 @@ function ContainerBillCell({
   document,
   error,
   isAdmin,
-  isUploading,
+  isBusy,
+  isDeletingFile,
+  onDelete,
   onUpload,
 }: {
   container: TableContainerRecord;
   document: AppointmentDocumentMeta;
   error?: string;
   isAdmin: boolean;
-  isUploading: boolean;
+  isBusy: boolean;
+  isDeletingFile: (file: AppointmentDocumentFileMeta) => boolean;
+  onDelete: (file: AppointmentDocumentFileMeta) => void;
   onUpload: (files: File[]) => void;
 }) {
   return (
@@ -5028,8 +5301,10 @@ function ContainerBillCell({
       error={error}
       getDocumentUrl={(file) => getContainerBillUrl(container, file.id)}
       isAdmin={isAdmin}
-      isUploading={isUploading}
+      isBusy={isBusy}
+      isDeletingFile={isDeletingFile}
       label="账单"
+      onDelete={onDelete}
       onUpload={onUpload}
     />
   );
@@ -5042,8 +5317,10 @@ function DocumentCollectionCell({
   error,
   getDocumentUrl,
   isAdmin,
-  isUploading,
+  isBusy,
+  isDeletingFile,
   label,
+  onDelete,
   onUpload,
 }: {
   canUpload: boolean;
@@ -5052,8 +5329,10 @@ function DocumentCollectionCell({
   error?: string;
   getDocumentUrl: (file: AppointmentDocumentFileMeta) => string;
   isAdmin: boolean;
-  isUploading: boolean;
+  isBusy: boolean;
+  isDeletingFile: (file: AppointmentDocumentFileMeta) => boolean;
   label: string;
+  onDelete: (file: AppointmentDocumentFileMeta) => void;
   onUpload: (files: File[]) => void;
 }) {
   const files = document.files;
@@ -5079,6 +5358,14 @@ function DocumentCollectionCell({
                   index={index}
                 />
                 {isAdmin ? <DocumentDownloadStatus document={file} /> : null}
+                {isAdmin ? (
+                  <DocumentDeleteButton
+                    file={file}
+                    isDeleting={isDeletingFile(file)}
+                    isDisabled={isBusy}
+                    onDelete={onDelete}
+                  />
+                ) : null}
               </div>
             ))}
           </div>
@@ -5087,17 +5374,25 @@ function DocumentCollectionCell({
       {isAdmin && files.length === 1 ? (
         <DocumentDownloadStatus document={files[0]} />
       ) : null}
+      {isAdmin && files.length === 1 ? (
+        <DocumentDeleteButton
+          file={files[0]}
+          isDeleting={isDeletingFile(files[0])}
+          isDisabled={isBusy}
+          onDelete={onDelete}
+        />
+      ) : null}
       {canUpload ? (
         <label
           className={[
             "documentUploadButton",
-            isUploading ? "isUploading" : "",
+            isBusy ? "isUploading" : "",
           ]
             .filter(Boolean)
             .join(" ")}
           aria-label={`添加${label}文件`}
           role="button"
-          tabIndex={isUploading ? -1 : 0}
+          tabIndex={isBusy ? -1 : 0}
           title={`添加${label}文件（可多选）`}
           onKeyDown={(event) => {
             if (event.key !== "Enter" && event.key !== " ") return;
@@ -5105,15 +5400,23 @@ function DocumentCollectionCell({
             event.currentTarget.querySelector("input")?.click();
           }}
         >
-          {isUploading ? (
+          {isBusy ? (
             <LoaderCircle className="cellSpinner" size={13} aria-hidden="true" />
           ) : (
             <Upload size={13} aria-hidden="true" />
           )}
-          <span>{isUploading ? "上传中" : files.length ? "添加" : "上传"}</span>
+          <span>
+            {isBusy
+              ? files.some(isDeletingFile)
+                ? "删除中"
+                : "上传中"
+              : files.length
+                ? "添加"
+                : "上传"}
+          </span>
           <input
             accept="image/*,application/pdf"
-            disabled={isUploading}
+            disabled={isBusy}
             multiple
             type="file"
             onChange={(event) => {
@@ -5151,6 +5454,35 @@ function DocumentFileLink({
       <FileText size={14} aria-hidden="true" />
       <span>{index === undefined ? "查看" : file.fileName ?? fallbackName}</span>
     </a>
+  );
+}
+
+function DocumentDeleteButton({
+  file,
+  isDeleting,
+  isDisabled,
+  onDelete,
+}: {
+  file: AppointmentDocumentFileMeta;
+  isDeleting: boolean;
+  isDisabled: boolean;
+  onDelete: (file: AppointmentDocumentFileMeta) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="documentDeleteButton"
+      aria-label={`删除${file.fileName ?? "文件"}`}
+      disabled={isDisabled}
+      title="删除文件"
+      onClick={() => onDelete(file)}
+    >
+      {isDeleting ? (
+        <LoaderCircle className="cellSpinner" size={13} aria-hidden="true" />
+      ) : (
+        <Trash2 size={13} aria-hidden="true" />
+      )}
+    </button>
   );
 }
 
@@ -5936,6 +6268,13 @@ function getContainerBillKey(rowId: string) {
   return `${rowId}:bill`;
 }
 
+function getDeletingDocumentKey(
+  scope: "appointment" | "bill",
+  documentId: string,
+) {
+  return `${scope}:${documentId}`;
+}
+
 function getAppointmentSourceDetailId(
   appointment: WarehouseAppointment,
   warehouseDetail: WarehouseDetail,
@@ -6249,6 +6588,14 @@ function appendDocumentFile(
   file: AppointmentDocumentFileMeta,
 ): AppointmentDocumentMeta {
   const files = [...document.files.filter((item) => item.id !== file.id), file];
+  return { hasFile: files.length > 0, files };
+}
+
+function removeDocumentFile(
+  document: AppointmentDocumentMeta,
+  documentId: string,
+): AppointmentDocumentMeta {
+  const files = document.files.filter((file) => file.id !== documentId);
   return { hasFile: files.length > 0, files };
 }
 

@@ -2006,6 +2006,60 @@ export async function getWarehouseAppointmentDocument({
   });
 }
 
+export async function deleteWarehouseAppointmentDocument({
+  customerId,
+  documentId,
+  sourceOrderId,
+  sourceOrderDetailId,
+  sourceAppointmentLineId,
+  documentType,
+}: {
+  customerId: string;
+  documentId: string;
+  sourceOrderId: string;
+  sourceOrderDetailId: string;
+  sourceAppointmentLineId: string;
+  documentType: AppointmentDocumentType;
+}) {
+  await ensureDocumentTrackingSchema();
+
+  return withAppTransaction(async (client) => {
+    const result = await client.query<{ id: string | number }>(
+      `
+        delete from public.portal_warehouse_appointment_document_files pwd
+        using public.portal_containers pc
+        where pwd.id = $1::bigint
+          and pwd.source_order_id = $2
+          and pwd.source_order_detail_id = $3
+          and pwd.source_appointment_line_id = $4
+          and pwd.document_type = $5
+          and pc.source_order_id = pwd.source_order_id
+          and pc.source_customer_id = $6
+          and pc.source_active = true
+          and exists (
+            select 1
+            from public.portal_warehouse_appointments pwa
+            where pwa.source_order_id = pwd.source_order_id
+              and pwa.source_order_detail_id = pwd.source_order_detail_id
+              and pwa.source_appointment_line_id = pwd.source_appointment_line_id
+              and pwa.source_active = true
+          )
+        returning pwd.id
+      `,
+      [
+        documentId,
+        sourceOrderId,
+        sourceOrderDetailId,
+        sourceAppointmentLineId,
+        documentType,
+        customerId,
+      ],
+    );
+
+    return rows(result).length > 0;
+  });
+}
+
 export async function recordWarehouseAppointmentDocumentDownload({
   customerId,
   documentId,
@@ -2173,6 +2227,36 @@ export async function getContainerBillDocument({
       ...toContainerBillDocumentFileMeta(document),
       data: document.data,
     };
+  });
+}
+
+export async function deleteContainerBillDocument({
+  customerId,
+  documentId,
+  sourceOrderId,
+}: {
+  customerId: string;
+  documentId: string;
+  sourceOrderId: string;
+}) {
+  await ensureDocumentTrackingSchema();
+
+  return withAppTransaction(async (client) => {
+    const result = await client.query<{ id: string | number }>(
+      `
+        delete from public.portal_container_bill_files pcb
+        using public.portal_containers pc
+        where pcb.id = $1::bigint
+          and pcb.source_order_id = $2
+          and pc.source_order_id = pcb.source_order_id
+          and pc.source_customer_id = $3
+          and pc.source_active = true
+        returning pcb.id
+      `,
+      [documentId, sourceOrderId, customerId],
+    );
+
+    return rows(result).length > 0;
   });
 }
 
