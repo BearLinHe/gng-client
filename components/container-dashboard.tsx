@@ -2800,21 +2800,8 @@ export default function ContainerDashboard() {
                 type="button"
                 className="tableIconButton expandIconButton"
                 aria-expanded={isExpanded}
-                aria-label={
-                  row.original.deliveryDetailsRestricted
-                    ? "提柜后开放仓点和预约详情"
-                    : isExpanded
-                      ? "收起详情"
-                      : "展开详情"
-                }
-                title={
-                  row.original.deliveryDetailsRestricted
-                    ? "提柜后开放仓点和预约详情"
-                    : isExpanded
-                      ? "收起详情"
-                      : "展开详情"
-                }
-                disabled={row.original.deliveryDetailsRestricted}
+                aria-label={isExpanded ? "收起详情" : "展开详情"}
+                title={isExpanded ? "收起详情" : "展开详情"}
                 onClick={() => toggleContainer(row.original.rowId)}
               >
                 <ChevronRight
@@ -2822,12 +2809,10 @@ export default function ContainerDashboard() {
                   size={15}
                   aria-hidden="true"
                 />
-                {row.original.deliveryDetailsRestricted ? null : (
-                  <SourceChangeDot
-                    count={sourceChangeCount}
-                    label={`${row.original.containerNumber} 有 ${sourceChangeCount} 条源数据变动`}
-                  />
-                )}
+                <SourceChangeDot
+                  count={sourceChangeCount}
+                  label={`${row.original.containerNumber} 有 ${sourceChangeCount} 条源数据变动`}
+                />
               </button>
             </div>
           );
@@ -2883,11 +2868,7 @@ export default function ContainerDashboard() {
         minSize: 104,
         sortingFn: dateSorting,
         cell: ({ row }) =>
-          row.original.deliveryDetailsRestricted ? (
-            <RestrictedCell
-              label={row.original.deliveryDetailsRestrictionLabel}
-            />
-          ) : isAdmin ? (
+          isAdmin ? (
             <EditableDateCell
               container={row.original}
               field="orderDate"
@@ -2917,11 +2898,7 @@ export default function ContainerDashboard() {
         minSize: 96,
         sortingFn: dateSorting,
         cell: ({ row }) =>
-          row.original.deliveryDetailsRestricted ? (
-            <RestrictedCell
-              label={row.original.deliveryDetailsRestrictionLabel}
-            />
-          ) : isAdmin ? (
+          isAdmin ? (
             <EditableDateCell
               container={row.original}
               field="etaDate"
@@ -2951,11 +2928,7 @@ export default function ContainerDashboard() {
         minSize: 96,
         sortingFn: dateSorting,
         cell: ({ row }) =>
-          row.original.deliveryDetailsRestricted ? (
-            <RestrictedCell
-              label={row.original.deliveryDetailsRestrictionLabel}
-            />
-          ) : isAdmin ? (
+          isAdmin ? (
             <EditableDateCell
               container={row.original}
               field="lfdDate"
@@ -3014,23 +2987,25 @@ export default function ContainerDashboard() {
         size: 112,
         minSize: 104,
         sortingFn: dateSorting,
-        cell: ({ row }) => <DateValue value={row.original.unloadDate} />,
-      },
-      {
-        accessorKey: "operationModeLabel",
-        header: "操作方式",
-        size: 92,
-        minSize: 84,
         cell: ({ row }) =>
           row.original.deliveryDetailsRestricted ? (
             <RestrictedCell
               label={row.original.deliveryDetailsRestrictionLabel}
             />
           ) : (
-            <span className={`pill ${row.original.operationMode ?? ""}`}>
-              {row.original.operationModeLabel}
-            </span>
+            <DateValue value={row.original.unloadDate} />
           ),
+      },
+      {
+        accessorKey: "operationModeLabel",
+        header: "操作方式",
+        size: 92,
+        minSize: 84,
+        cell: ({ row }) => (
+          <span className={`pill ${row.original.operationMode ?? ""}`}>
+            {row.original.operationModeLabel}
+          </span>
+        ),
       },
       {
         id: "location",
@@ -3039,19 +3014,14 @@ export default function ContainerDashboard() {
         size: 248,
         minSize: 200,
         maxSize: 320,
-        cell: ({ row }) =>
-          row.original.deliveryDetailsRestricted ? (
-            <RestrictedCell
-              label={row.original.deliveryDetailsRestrictionLabel}
-            />
-          ) : (
-            <LocationCell
-              value={getLocationText(row.original)}
-              transferDetails={row.original.warehouseDetails.filter(
-                isTransferWarehouseDetail,
-              )}
-            />
-          ),
+        cell: ({ row }) => (
+          <LocationCell
+            value={getLocationText(row.original)}
+            transferDetails={row.original.warehouseDetails.filter(
+              isTransferWarehouseDetail,
+            )}
+          />
+        ),
       },
       {
         id: "warehouseDeliveryProgress",
@@ -3077,34 +3047,29 @@ export default function ContainerDashboard() {
         minSize: 164,
         maxSize: 210,
         enableSorting: false,
-        cell: ({ row }) =>
-          row.original.deliveryDetailsRestricted ? (
-            <RestrictedCell
-              label={row.original.deliveryDetailsRestrictionLabel}
-            />
-          ) : (
-            <ContainerBillCell
-              container={row.original}
-              document={row.original.billDocument}
-              error={containerBillErrors[getContainerBillKey(row.original.rowId)]}
-              isAdmin={isAdmin}
-              isBusy={savingContainerBills.has(
-                getContainerBillKey(row.original.rowId),
-              )}
-              isDeletingFile={(file) =>
-                deletingDocumentIds.has(
-                  getDeletingDocumentKey("bill", file.id),
-                )
-              }
-              onDelete={(file) => deleteContainerBill(row.original, file)}
-              onUpload={(files) =>
-                uploadContainerBill({
-                  container: row.original,
-                  files,
-                })
-              }
-            />
-          ),
+        cell: ({ row }) => (
+          <ContainerBillCell
+            container={row.original}
+            document={row.original.billDocument}
+            error={containerBillErrors[getContainerBillKey(row.original.rowId)]}
+            isAdmin={isAdmin}
+            isBusy={savingContainerBills.has(
+              getContainerBillKey(row.original.rowId),
+            )}
+            isDeletingFile={(file) =>
+              deletingDocumentIds.has(
+                getDeletingDocumentKey("bill", file.id),
+              )
+            }
+            onDelete={(file) => deleteContainerBill(row.original, file)}
+            onUpload={(files) =>
+              uploadContainerBill({
+                container: row.original,
+                files,
+              })
+            }
+          />
+        ),
       },
       {
         id: "extraChargeResponsibility",
@@ -3114,14 +3079,6 @@ export default function ContainerDashboard() {
         maxSize: 340,
         enableSorting: false,
         cell: ({ row }) => {
-          if (row.original.deliveryDetailsRestricted) {
-            return (
-              <RestrictedCell
-                label={row.original.deliveryDetailsRestrictionLabel}
-              />
-            );
-          }
-
           const key = getContainerTextKey(
             row.original.rowId,
             "extraChargeResponsibility",
@@ -4236,39 +4193,47 @@ export default function ContainerDashboard() {
                                             />
                                           </div>
                                           <div className="warehouseWindowCell">
-                                            <InlineEditableTextCell
-                                              error={
-                                                textCellErrors[
+                                            {container.deliveryDetailsRestricted ? (
+                                              <RestrictedCell
+                                                label={
+                                                  container.deliveryDetailsRestrictionLabel
+                                                }
+                                              />
+                                            ) : (
+                                              <InlineEditableTextCell
+                                                error={
+                                                  textCellErrors[
+                                                    getWarehouseDetailTextKey(
+                                                      container.rowId,
+                                                      detail.sourceOrderDetailId,
+                                                      "windowPeriod",
+                                                    )
+                                                  ]
+                                                }
+                                                isSaving={savingTextCells.has(
                                                   getWarehouseDetailTextKey(
                                                     container.rowId,
                                                     detail.sourceOrderDetailId,
                                                     "windowPeriod",
+                                                  ),
+                                                )}
+                                                label={`${detail.warehousePoint} 窗口期`}
+                                                onCommit={(value) =>
+                                                  commitWarehouseDetailText(
+                                                    container,
+                                                    detail,
+                                                    "windowPeriod",
+                                                    value,
                                                   )
-                                                ]
-                                              }
-                                              isSaving={savingTextCells.has(
-                                                getWarehouseDetailTextKey(
-                                                  container.rowId,
-                                                  detail.sourceOrderDetailId,
-                                                  "windowPeriod",
-                                                ),
-                                              )}
-                                              label={`${detail.warehousePoint} 窗口期`}
-                                              onCommit={(value) =>
-                                                commitWarehouseDetailText(
-                                                  container,
-                                                  detail,
-                                                  "windowPeriod",
-                                                  value,
-                                                )
-                                              }
-                                              placeholder="添加窗口期"
-                                              readOnly={!isAdmin}
-                                              value={valueOrDash(
-                                                detail.windowPeriod,
-                                              )}
-                                              editValue={detail.windowPeriod}
-                                            />
+                                                }
+                                                placeholder="添加窗口期"
+                                                readOnly={!isAdmin}
+                                                value={valueOrDash(
+                                                  detail.windowPeriod,
+                                                )}
+                                                editValue={detail.windowPeriod}
+                                              />
+                                            )}
                                           </div>
                                           <div className="warehouseNoteCell">
                                             <InlineEditableTextCell
@@ -4304,58 +4269,74 @@ export default function ContainerDashboard() {
                                             />
                                           </div>
                                           <div className="warehousePalletCell">
-                                            <EditableWarehouseDetailCell
-                                              detail={detail}
-                                              container={container}
-                                              draft={warehouseDetailDraft}
-                                              error={
-                                                warehouseDetailCellErrors[
+                                            {container.deliveryDetailsRestricted ? (
+                                              <RestrictedCell
+                                                label={
+                                                  container.deliveryDetailsRestrictionLabel
+                                                }
+                                              />
+                                            ) : (
+                                              <EditableWarehouseDetailCell
+                                                detail={detail}
+                                                container={container}
+                                                draft={warehouseDetailDraft}
+                                                error={
+                                                  warehouseDetailCellErrors[
+                                                    getWarehouseDetailCellKey(
+                                                      container.rowId,
+                                                      detail.sourceOrderDetailId,
+                                                      "actualPallets",
+                                                    )
+                                                  ]
+                                                }
+                                                field="actualPallets"
+                                                isEditing={isEditingWarehouseDetailCell(
+                                                  editingWarehouseDetailCell,
+                                                  container.rowId,
+                                                  detail.sourceOrderDetailId,
+                                                  "actualPallets",
+                                                )}
+                                                isSaving={savingWarehouseDetailCells.has(
                                                   getWarehouseDetailCellKey(
                                                     container.rowId,
                                                     detail.sourceOrderDetailId,
                                                     "actualPallets",
+                                                  ),
+                                                )}
+                                                onCancel={cancelWarehouseDetailEdit}
+                                                onCommit={(value) =>
+                                                  commitWarehouseDetailEdit(
+                                                    container,
+                                                    detail,
+                                                    "actualPallets",
+                                                    value,
                                                   )
-                                                ]
-                                              }
-                                              field="actualPallets"
-                                              isEditing={isEditingWarehouseDetailCell(
-                                                editingWarehouseDetailCell,
-                                                container.rowId,
-                                                detail.sourceOrderDetailId,
-                                                "actualPallets",
-                                              )}
-                                              isSaving={savingWarehouseDetailCells.has(
-                                                getWarehouseDetailCellKey(
-                                                  container.rowId,
-                                                  detail.sourceOrderDetailId,
-                                                  "actualPallets",
-                                                ),
-                                              )}
-                                              onCancel={cancelWarehouseDetailEdit}
-                                              onCommit={(value) =>
-                                                commitWarehouseDetailEdit(
-                                                  container,
-                                                  detail,
-                                                  "actualPallets",
-                                                  value,
-                                                )
-                                              }
-                                              onDraftChange={
-                                                setWarehouseDetailDraft
-                                              }
-                                              readOnly={!isAdmin}
-                                              onStart={() =>
-                                                startWarehouseDetailEdit(
-                                                  container,
-                                                  detail,
-                                                  "actualPallets",
-                                                )
+                                                }
+                                                onDraftChange={
+                                                  setWarehouseDetailDraft
+                                                }
+                                                readOnly={!isAdmin}
+                                                onStart={() =>
+                                                  startWarehouseDetailEdit(
+                                                    container,
+                                                    detail,
+                                                    "actualPallets",
+                                                  )
+                                                }
+                                              />
+                                            )}
+                                          </div>
+                                          {container.deliveryDetailsRestricted ? (
+                                            <RestrictedCell
+                                              label={
+                                                container.deliveryDetailsRestrictionLabel
                                               }
                                             />
-                                          </div>
-                                          <span className="appointmentCountBadge">
-                                            {detail.appointments.length} 个
-                                          </span>
+                                          ) : (
+                                            <span className="appointmentCountBadge">
+                                              {detail.appointments.length} 个
+                                            </span>
+                                          )}
                                         </div>
                                         {isDetailExpanded ? (
                                           <div className="warehouseAppointmentPanel">
@@ -4909,6 +4890,14 @@ export default function ContainerDashboard() {
                                             ) : detail.appointments.length ? (
                                               <div className="noAppointments">
                                                 客服暂未开放预约字段
+                                              </div>
+                                            ) : container.deliveryDetailsRestricted ? (
+                                              <div className="noAppointments">
+                                                <RestrictedCell
+                                                  label={
+                                                    container.deliveryDetailsRestrictionLabel
+                                                  }
+                                                />
                                               </div>
                                             ) : (
                                               <div className="noAppointments">

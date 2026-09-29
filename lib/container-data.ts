@@ -158,6 +158,7 @@ type ContainerRow = {
   source_pickup_date: Date | string | null;
   unload_date: Date | string | null;
   has_source_actual_pallets: boolean | null;
+  source_operation_mode: string | null;
   operation_mode: string | null;
   destination: string | null;
   warehouse_points: string | null;
@@ -542,12 +543,27 @@ function deliveryDetailsAvailableSql(
     )
     or (
       ${revealRuleParameter}::text = 'actual_pallets'
-      and exists (
-        select 1
-        from public.portal_warehouse_details pwd_reveal_access
-        where pwd_reveal_access.source_order_id = ${containerAlias}.source_order_id
-          and pwd_reveal_access.source_active = true
-          and pwd_reveal_access.source_has_actual_pallets = true
+      and (
+        (
+          ${containerAlias}.source_operation_mode = 'direct_delivery'
+          and ${containerAlias}.source_pickup_date is not null
+        )
+        or (
+          coalesce(${containerAlias}.source_operation_mode, '') <> 'direct_delivery'
+          and exists (
+            select 1
+            from public.portal_warehouse_details pwd_reveal_any
+            where pwd_reveal_any.source_order_id = ${containerAlias}.source_order_id
+              and pwd_reveal_any.source_active = true
+          )
+          and not exists (
+            select 1
+            from public.portal_warehouse_details pwd_reveal_missing
+            where pwd_reveal_missing.source_order_id = ${containerAlias}.source_order_id
+              and pwd_reveal_missing.source_active = true
+              and pwd_reveal_missing.source_has_actual_pallets = false
+          )
+        )
       )
     )
   )`;
@@ -557,10 +573,12 @@ function isDeliveryDetailsRestricted(
   revealRule: DeliveryDetailsRevealRule,
   {
     hasSourceActualPallets,
+    sourceOperationMode,
     sourcePickupDate,
     sourceUnloadDate,
   }: {
     hasSourceActualPallets: boolean;
+    sourceOperationMode: string | null;
     sourcePickupDate: string | null;
     sourceUnloadDate: string | null;
   },
@@ -568,15 +586,21 @@ function isDeliveryDetailsRestricted(
   if (revealRule === "always") return false;
   if (revealRule === "source_pickup") return !sourcePickupDate;
   if (revealRule === "source_unload") return !sourceUnloadDate;
+  if (sourceOperationMode === "direct_delivery") return !sourcePickupDate;
   return !hasSourceActualPallets;
 }
 
 function getDeliveryDetailsRestrictionLabel(
   revealRule: DeliveryDetailsRevealRule,
+  sourceOperationMode: string | null,
 ) {
   if (revealRule === "source_pickup") return "提柜后开放";
   if (revealRule === "source_unload") return "拆柜后开放";
-  if (revealRule === "actual_pallets") return "实际板数录入后开放";
+  if (revealRule === "actual_pallets") {
+    return sourceOperationMode === "direct_delivery"
+      ? "提柜后开放"
+      : "实际板数录入后开放";
+  }
   return null;
 }
 
@@ -1250,11 +1274,18 @@ export async function getContainers({
           pc.source_unload_date as unload_date,
           exists (
             select 1
-            from public.portal_warehouse_details pwd_reveal
-            where pwd_reveal.source_order_id = pc.source_order_id
-              and pwd_reveal.source_active = true
-              and pwd_reveal.source_has_actual_pallets = true
+            from public.portal_warehouse_details pwd_reveal_any
+            where pwd_reveal_any.source_order_id = pc.source_order_id
+              and pwd_reveal_any.source_active = true
+          )
+          and not exists (
+            select 1
+            from public.portal_warehouse_details pwd_reveal_missing
+            where pwd_reveal_missing.source_order_id = pc.source_order_id
+              and pwd_reveal_missing.source_active = true
+              and pwd_reveal_missing.source_has_actual_pallets = false
           ) as has_source_actual_pallets,
+          pc.source_operation_mode,
           coalesce(pc.manual_operation_mode, pc.source_operation_mode) as operation_mode,
           coalesce(pc.manual_destination, pc.source_destination) as destination,
           coalesce(pc.manual_warehouse_points, pc.source_warehouse_points) as warehouse_points,
@@ -2251,7 +2282,6 @@ export async function getContainerBillDocument({
   customerId,
   documentId,
   sourceOrderId,
-  deliveryDetailsRevealRule = "always",
 }: {
   customerId: string;
   documentId: string;
@@ -2283,10 +2313,9 @@ export async function getContainerBillDocument({
           and pcb.source_order_id = $2
           and pc.source_customer_id = $3
           and pc.source_active = true
-          and ${deliveryDetailsAvailableSql("pc", "$4")}
         limit 1
       `,
-      [documentId, sourceOrderId, customerId, deliveryDetailsRevealRule],
+      [documentId, sourceOrderId, customerId],
     );
     const document = rows(result)[0];
 
@@ -2495,6 +2524,7 @@ export async function getSourceContainers({
           o.pickup_date,
           o.pickup_date as source_pickup_date,
           inbound_schedule.planned_unload_at as unload_date,
+          o.operation_mode as source_operation_mode,
           o.operation_mode,
           coalesce(
             nullif(
@@ -2556,12 +2586,16 @@ function toContainerRecord(
     deliveryDetailsRevealRule,
     {
       hasSourceActualPallets: Boolean(row.has_source_actual_pallets),
+      sourceOperationMode: row.source_operation_mode,
       sourcePickupDate,
       sourceUnloadDate,
     },
   );
   const deliveryDetailsRestrictionLabel = deliveryDetailsRestricted
-    ? getDeliveryDetailsRestrictionLabel(deliveryDetailsRevealRule)
+    ? getDeliveryDetailsRestrictionLabel(
+        deliveryDetailsRevealRule,
+        row.source_operation_mode,
+      )
     : null;
   const appointments = (row.appointments ?? []).map(toDeliveryAppointment);
   const appointmentDocuments = buildAppointmentDocumentMap(
@@ -2576,6 +2610,15 @@ function toContainerRecord(
       pickupDate: formatDate(row.pickup_date),
     },
   );
+  const visibleWarehouseDetails = deliveryDetailsRestricted
+    ? warehouseDetails.map((detail) => ({
+        ...detail,
+        windowPeriod: null,
+        actualPallets: null,
+        appointments: [],
+        sourceChangeEvents: [],
+      }))
+    : warehouseDetails;
 
   return {
     sourceOrderId: row.source_order_id,
@@ -2583,31 +2626,26 @@ function toContainerRecord(
     customerId: row.customer_id,
     customerCode: row.customer_code,
     customerName: row.customer_name ?? "未分配客户",
-    orderDate: deliveryDetailsRestricted ? null : formatDate(row.order_date),
-    etaDate: deliveryDetailsRestricted ? null : formatDate(row.eta_date),
-    lfdDate: deliveryDetailsRestricted ? null : formatDate(row.lfd_date),
-    pickupDate: deliveryDetailsRevealRule === "source_pickup"
-      ? sourcePickupDate
-      : formatDate(row.pickup_date),
-    unloadDate: deliveryDetailsRestricted
-      ? null
-      : sourceUnloadDate,
+    orderDate: formatDate(row.order_date),
+    etaDate: formatDate(row.eta_date),
+    lfdDate: formatDate(row.lfd_date),
+    pickupDate:
+      deliveryDetailsRevealRule === "source_pickup" ||
+      (deliveryDetailsRevealRule === "actual_pallets" &&
+        row.source_operation_mode === "direct_delivery")
+        ? sourcePickupDate
+        : formatDate(row.pickup_date),
+    unloadDate: deliveryDetailsRestricted ? null : sourceUnloadDate,
     deliveryDetailsRestricted,
     deliveryDetailsRestrictionLabel,
-    operationMode: deliveryDetailsRestricted ? null : row.operation_mode,
-    operationModeLabel: deliveryDetailsRestricted
-      ? deliveryDetailsRestrictionLabel ?? "暂未开放"
-      : formatOperationMode(row.operation_mode),
-    destination: deliveryDetailsRestricted ? null : row.destination,
-    warehousePoints: deliveryDetailsRestricted ? null : row.warehouse_points,
-    extraChargeResponsibility: deliveryDetailsRestricted
-      ? null
-      : row.extra_charge_responsibility,
+    operationMode: row.operation_mode,
+    operationModeLabel: formatOperationMode(row.operation_mode),
+    destination: row.destination,
+    warehousePoints: row.warehouse_points,
+    extraChargeResponsibility: row.extra_charge_responsibility,
     appointments: deliveryDetailsRestricted ? [] : appointments,
-    warehouseDetails: deliveryDetailsRestricted ? [] : warehouseDetails,
-    billDocument: deliveryDetailsRestricted
-      ? emptyAppointmentDocument()
-      : toContainerBillDocumentMeta(row.bill_documents ?? []),
+    warehouseDetails: visibleWarehouseDetails,
+    billDocument: toContainerBillDocumentMeta(row.bill_documents ?? []),
   };
 }
 
