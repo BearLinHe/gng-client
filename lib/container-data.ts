@@ -599,7 +599,7 @@ function getDeliveryDetailsRestrictionLabel(
   if (revealRule === "actual_pallets") {
     return sourceOperationMode === "direct_delivery"
       ? "提柜后开放"
-      : "实际板数录入后开放";
+      : "确认拆柜以后";
   }
   return null;
 }
