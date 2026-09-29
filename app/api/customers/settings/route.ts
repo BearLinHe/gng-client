@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { readCustomerSession } from "@/lib/auth";
 import {
   getCustomerVisibilitySettings,
+  normalizeDeliveryDetailsRevealRule,
   normalizeSettings,
   updateCustomerVisibilitySettings,
   type CustomerVisibilitySettings,
@@ -78,17 +79,16 @@ function parseSettings(value: unknown): CustomerVisibilitySettings | null {
       ? (value.settings as Record<string, unknown>)
       : (value as Record<string, unknown>);
 
-  const keys: Array<keyof CustomerVisibilitySettings> = [
+  const booleanKeys = [
     "showAppointmentNumber",
     "showDeliveryDate",
     "showEffectivePallets",
     "showPod",
     "showBol",
     "showSourceChangeNotifications",
-    "revealDeliveryDetailsAfterPickup",
-  ];
+  ] as const satisfies ReadonlyArray<keyof CustomerVisibilitySettings>;
 
-  for (const key of keys) {
+  for (const key of booleanKeys) {
     if (
       rawSettings[key] !== undefined &&
       typeof rawSettings[key] !== "boolean"
@@ -97,11 +97,24 @@ function parseSettings(value: unknown): CustomerVisibilitySettings | null {
     }
   }
 
+  const revealRule = rawSettings.deliveryDetailsRevealRule;
+  if (
+    revealRule !== undefined &&
+    normalizeDeliveryDetailsRevealRule(revealRule) !== revealRule
+  ) {
+    return null;
+  }
+
   return normalizeSettings(
-    Object.fromEntries(
-      keys
+    {
+      ...Object.fromEntries(
+        booleanKeys
         .filter((key) => rawSettings[key] !== undefined)
         .map((key) => [key, rawSettings[key]]),
-    ) as Partial<CustomerVisibilitySettings>,
+      ),
+      ...(revealRule === undefined
+        ? {}
+        : { deliveryDetailsRevealRule: revealRule }),
+    } as Partial<CustomerVisibilitySettings>,
   );
 }

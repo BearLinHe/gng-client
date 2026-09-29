@@ -64,6 +64,12 @@ type CustomerBalance = {
   updatedAt: string | null;
 };
 
+type DeliveryDetailsRevealRule =
+  | "source_pickup"
+  | "source_unload"
+  | "actual_pallets"
+  | "always";
+
 type CustomerVisibilitySettings = {
   showAppointmentNumber: boolean;
   showDeliveryDate: boolean;
@@ -71,7 +77,7 @@ type CustomerVisibilitySettings = {
   showPod: boolean;
   showBol: boolean;
   showSourceChangeNotifications: boolean;
-  revealDeliveryDetailsAfterPickup: boolean;
+  deliveryDetailsRevealRule: DeliveryDetailsRevealRule;
 };
 
 type SyncRunStatus = {
@@ -97,6 +103,7 @@ type ContainerRecord = {
   pickupDate: string | null;
   unloadDate: string | null;
   deliveryDetailsRestricted: boolean;
+  deliveryDetailsRestrictionLabel: string | null;
   operationMode: string | null;
   operationModeLabel: string;
   destination: string | null;
@@ -230,10 +237,14 @@ const defaultCustomerVisibilitySettings: CustomerVisibilitySettings = {
   showPod: true,
   showBol: true,
   showSourceChangeNotifications: true,
-  revealDeliveryDetailsAfterPickup: false,
+  deliveryDetailsRevealRule: "actual_pallets",
 };
+type BooleanCustomerVisibilitySettingKey = Exclude<
+  keyof CustomerVisibilitySettings,
+  "deliveryDetailsRevealRule"
+>;
 const customerVisibilityOptions: Array<{
-  key: keyof CustomerVisibilitySettings;
+  key: BooleanCustomerVisibilitySettingKey;
   label: string;
 }> = [
   { key: "showAppointmentNumber", label: "ISA号码" },
@@ -242,10 +253,15 @@ const customerVisibilityOptions: Array<{
   { key: "showPod", label: "POD" },
   { key: "showBol", label: "BOL" },
   { key: "showSourceChangeNotifications", label: "变动通知" },
-  {
-    key: "revealDeliveryDetailsAfterPickup",
-    label: "提柜后开放约仓",
-  },
+];
+const deliveryDetailsRevealRuleOptions: Array<{
+  value: DeliveryDetailsRevealRule;
+  label: string;
+}> = [
+  { value: "source_pickup", label: "源系统提柜日期后显示" },
+  { value: "source_unload", label: "源系统拆柜日期后显示" },
+  { value: "actual_pallets", label: "源系统有实际板数后显示" },
+  { value: "always", label: "全部显示送仓信息" },
 ];
 
 export default function ContainerDashboard() {
@@ -1140,15 +1156,29 @@ export default function ContainerDashboard() {
   }
 
   async function updateCustomerSetting(
-    key: keyof CustomerVisibilitySettings,
+    key: BooleanCustomerVisibilitySettingKey,
     checked: boolean,
+  ) {
+    await saveCustomerSettings({
+      ...customerSettings,
+      [key]: checked,
+    });
+  }
+
+  async function updateDeliveryDetailsRevealRule(
+    deliveryDetailsRevealRule: DeliveryDetailsRevealRule,
+  ) {
+    await saveCustomerSettings({
+      ...customerSettings,
+      deliveryDetailsRevealRule,
+    });
+  }
+
+  async function saveCustomerSettings(
+    nextSettings: CustomerVisibilitySettings,
   ) {
     if (!isAdmin) return;
 
-    const nextSettings = {
-      ...customerSettings,
-      [key]: checked,
-    };
     const previousSettings = customerSettings;
 
     setCustomerSettings(nextSettings);
@@ -2854,7 +2884,9 @@ export default function ContainerDashboard() {
         sortingFn: dateSorting,
         cell: ({ row }) =>
           row.original.deliveryDetailsRestricted ? (
-            <RestrictedCell />
+            <RestrictedCell
+              label={row.original.deliveryDetailsRestrictionLabel}
+            />
           ) : isAdmin ? (
             <EditableDateCell
               container={row.original}
@@ -2886,7 +2918,9 @@ export default function ContainerDashboard() {
         sortingFn: dateSorting,
         cell: ({ row }) =>
           row.original.deliveryDetailsRestricted ? (
-            <RestrictedCell />
+            <RestrictedCell
+              label={row.original.deliveryDetailsRestrictionLabel}
+            />
           ) : isAdmin ? (
             <EditableDateCell
               container={row.original}
@@ -2918,7 +2952,9 @@ export default function ContainerDashboard() {
         sortingFn: dateSorting,
         cell: ({ row }) =>
           row.original.deliveryDetailsRestricted ? (
-            <RestrictedCell />
+            <RestrictedCell
+              label={row.original.deliveryDetailsRestrictionLabel}
+            />
           ) : isAdmin ? (
             <EditableDateCell
               container={row.original}
@@ -2987,7 +3023,9 @@ export default function ContainerDashboard() {
         minSize: 84,
         cell: ({ row }) =>
           row.original.deliveryDetailsRestricted ? (
-            <RestrictedCell />
+            <RestrictedCell
+              label={row.original.deliveryDetailsRestrictionLabel}
+            />
           ) : (
             <span className={`pill ${row.original.operationMode ?? ""}`}>
               {row.original.operationModeLabel}
@@ -3003,7 +3041,9 @@ export default function ContainerDashboard() {
         maxSize: 320,
         cell: ({ row }) =>
           row.original.deliveryDetailsRestricted ? (
-            <RestrictedCell />
+            <RestrictedCell
+              label={row.original.deliveryDetailsRestrictionLabel}
+            />
           ) : (
             <LocationCell
               value={getLocationText(row.original)}
@@ -3023,7 +3063,9 @@ export default function ContainerDashboard() {
         sortingFn: "basic",
         cell: ({ row }) =>
           row.original.deliveryDetailsRestricted ? (
-            <RestrictedCell />
+            <RestrictedCell
+              label={row.original.deliveryDetailsRestrictionLabel}
+            />
           ) : (
             <WarehouseDeliveryProgressCell container={row.original} />
           ),
@@ -3037,7 +3079,9 @@ export default function ContainerDashboard() {
         enableSorting: false,
         cell: ({ row }) =>
           row.original.deliveryDetailsRestricted ? (
-            <RestrictedCell />
+            <RestrictedCell
+              label={row.original.deliveryDetailsRestrictionLabel}
+            />
           ) : (
             <ContainerBillCell
               container={row.original}
@@ -3071,7 +3115,11 @@ export default function ContainerDashboard() {
         enableSorting: false,
         cell: ({ row }) => {
           if (row.original.deliveryDetailsRestricted) {
-            return <RestrictedCell />;
+            return (
+              <RestrictedCell
+                label={row.original.deliveryDetailsRestrictionLabel}
+              />
+            );
           }
 
           const key = getContainerTextKey(
@@ -3767,6 +3815,24 @@ export default function ContainerDashboard() {
             <strong>控制客户账号可查看的预约字段</strong>
           </div>
           <div className="settingsToggleGroup">
+            <label className="deliveryRevealRuleControl">
+              <span>送仓信息开放条件</span>
+              <select
+                value={customerSettings.deliveryDetailsRevealRule}
+                disabled={settingsState === "loading"}
+                onChange={(event) =>
+                  updateDeliveryDetailsRevealRule(
+                    event.currentTarget.value as DeliveryDetailsRevealRule,
+                  )
+                }
+              >
+                {deliveryDetailsRevealRuleOptions.map((option) => (
+                  <option value={option.value} key={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
             {customerVisibilityOptions.map((option) => (
               <label className="settingsToggle" key={option.key}>
                 <input
@@ -5554,11 +5620,13 @@ function DateValue({ value }: { value: string | null | undefined }) {
   );
 }
 
-function RestrictedCell() {
+function RestrictedCell({ label }: { label: string | null }) {
+  const displayLabel = label ?? "暂未开放";
+
   return (
-    <span className="restrictedCell" title="海柜提柜后开放此信息">
+    <span className="restrictedCell" title={`${displayLabel}此信息`}>
       <LockKeyhole size={13} aria-hidden="true" />
-      <span>提柜后开放</span>
+      <span>{displayLabel}</span>
     </span>
   );
 }
@@ -6776,12 +6844,14 @@ function createMockContainers(): TableContainerRecord[] {
       | "extraChargeResponsibility"
       | "unloadDate"
       | "deliveryDetailsRestricted"
+      | "deliveryDetailsRestrictionLabel"
     > & {
       extraChargeResponsibility?: string | null;
       warehouseDetails?: WarehouseDetail[];
       billDocument?: AppointmentDocumentMeta;
       unloadDate?: string | null;
       deliveryDetailsRestricted?: boolean;
+      deliveryDetailsRestrictionLabel?: string | null;
     }
   > = [
     {
@@ -6968,6 +7038,7 @@ function createMockContainers(): TableContainerRecord[] {
       pickupDate: rowNumber % 5 === 0 ? `2026-03-20` : null,
       unloadDate: `2026-03-${String((rowNumber % 24) + 4).padStart(2, "0")}`,
       deliveryDetailsRestricted: false,
+      deliveryDetailsRestrictionLabel: null,
       operationMode: isUnload ? "unload" : "direct_delivery",
       operationModeLabel: isUnload ? "拆柜" : "直送",
       destination: isUnload ? null : `DST${rowNumber}, Direct Destination ${rowNumber}`,
@@ -7017,6 +7088,8 @@ function createMockContainers(): TableContainerRecord[] {
       ...container,
       unloadDate: container.unloadDate ?? null,
       deliveryDetailsRestricted: container.deliveryDetailsRestricted ?? false,
+      deliveryDetailsRestrictionLabel:
+        container.deliveryDetailsRestrictionLabel ?? null,
       extraChargeResponsibility: container.extraChargeResponsibility ?? null,
       billDocument: container.billDocument ?? emptyAppointmentDocument(),
       warehouseDetails: container.warehouseDetails ?? [],

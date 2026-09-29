@@ -41,8 +41,10 @@ export async function GET(request: NextRequest) {
     const document = await getWarehouseAppointmentDocument({
       customerId: customer.id,
       documentId,
-      requireSourcePickup:
-        settings?.revealDeliveryDetailsAfterPickup ?? false,
+      deliveryDetailsRevealRule:
+        customer.role === "admin"
+          ? "always"
+          : settings?.deliveryDetailsRevealRule ?? "actual_pallets",
       ...payload,
     });
 

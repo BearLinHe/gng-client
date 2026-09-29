@@ -57,9 +57,10 @@ export async function GET(request: NextRequest) {
           : settings?.showSourceChangeNotifications
             ? "customer"
             : "none",
-      restrictDeliveryDetailsUntilSourcePickup:
-        customer.role !== "admin" &&
-        Boolean(settings?.revealDeliveryDetailsAfterPickup),
+      deliveryDetailsRevealRule:
+        customer.role === "admin"
+          ? "always"
+          : settings?.deliveryDetailsRevealRule ?? "actual_pallets",
       operationMode,
       search,
       dateField,

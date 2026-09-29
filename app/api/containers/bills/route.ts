@@ -38,8 +38,10 @@ export async function GET(request: NextRequest) {
       customerId: customer.id,
       documentId,
       sourceOrderId,
-      requireSourcePickup:
-        settings?.revealDeliveryDetailsAfterPickup ?? false,
+      deliveryDetailsRevealRule:
+        customer.role === "admin"
+          ? "always"
+          : settings?.deliveryDetailsRevealRule ?? "actual_pallets",
     });
 
     if (!document) {

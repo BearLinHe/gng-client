@@ -4,6 +4,7 @@ import {
   withAppReadOnlyTransaction,
   withSourceReadOnlyTransaction,
 } from "@/lib/db";
+import type { DeliveryDetailsRevealRule } from "@/lib/customer-settings";
 
 export type CustomerOption = {
   id: string;
@@ -24,6 +25,7 @@ export type ContainerRecord = {
   pickupDate: string | null;
   unloadDate: string | null;
   deliveryDetailsRestricted: boolean;
+  deliveryDetailsRestrictionLabel: string | null;
   operationMode: string | null;
   operationModeLabel: string;
   destination: string | null;
@@ -155,6 +157,7 @@ type ContainerRow = {
   pickup_date: Date | string | null;
   source_pickup_date: Date | string | null;
   unload_date: Date | string | null;
+  has_source_actual_pallets: boolean | null;
   operation_mode: string | null;
   destination: string | null;
   warehouse_points: string | null;
@@ -523,6 +526,60 @@ function warehouseDeliveryProgressFilterSql(
   return `(not ${hasWarehouseDetailSql} or ${hasIncompleteWarehousePointSql})`;
 }
 
+function deliveryDetailsAvailableSql(
+  containerAlias: string,
+  revealRuleParameter: string,
+) {
+  return `(
+    ${revealRuleParameter}::text = 'always'
+    or (
+      ${revealRuleParameter}::text = 'source_pickup'
+      and ${containerAlias}.source_pickup_date is not null
+    )
+    or (
+      ${revealRuleParameter}::text = 'source_unload'
+      and ${containerAlias}.source_unload_date is not null
+    )
+    or (
+      ${revealRuleParameter}::text = 'actual_pallets'
+      and exists (
+        select 1
+        from public.portal_warehouse_details pwd_reveal_access
+        where pwd_reveal_access.source_order_id = ${containerAlias}.source_order_id
+          and pwd_reveal_access.source_active = true
+          and pwd_reveal_access.source_has_actual_pallets = true
+      )
+    )
+  )`;
+}
+
+function isDeliveryDetailsRestricted(
+  revealRule: DeliveryDetailsRevealRule,
+  {
+    hasSourceActualPallets,
+    sourcePickupDate,
+    sourceUnloadDate,
+  }: {
+    hasSourceActualPallets: boolean;
+    sourcePickupDate: string | null;
+    sourceUnloadDate: string | null;
+  },
+) {
+  if (revealRule === "always") return false;
+  if (revealRule === "source_pickup") return !sourcePickupDate;
+  if (revealRule === "source_unload") return !sourceUnloadDate;
+  return !hasSourceActualPallets;
+}
+
+function getDeliveryDetailsRestrictionLabel(
+  revealRule: DeliveryDetailsRevealRule,
+) {
+  if (revealRule === "source_pickup") return "提柜后开放";
+  if (revealRule === "source_unload") return "拆柜后开放";
+  if (revealRule === "actual_pallets") return "实际板数录入后开放";
+  return null;
+}
+
 const appWarehouseDetailColumns: Record<EditableWarehouseDetailField, string> =
   {
     actualPallets:
@@ -548,6 +605,9 @@ async function ensureContainerReleaseSchema() {
     await client.query(`
       alter table public.portal_containers
         add column if not exists source_unload_date date;
+
+      alter table public.portal_warehouse_details
+        add column if not exists source_has_actual_pallets boolean not null default false;
     `);
   }).catch((error) => {
     containerReleaseSchemaPromise = null;
@@ -960,7 +1020,7 @@ export async function getContainers({
   warehouseDeliveryProgressStatus,
   pickupStatus,
   sourceChangeEventView = "none",
-  restrictDeliveryDetailsUntilSourcePickup = false,
+  deliveryDetailsRevealRule = "always",
   page = 1,
   pageSize = 100,
 }: {
@@ -974,7 +1034,7 @@ export async function getContainers({
   warehouseDeliveryProgressStatus?: WarehouseDeliveryProgressStatus | null;
   pickupStatus?: PickupStatus | null;
   sourceChangeEventView?: "admin" | "customer" | "none";
-  restrictDeliveryDetailsUntilSourcePickup?: boolean;
+  deliveryDetailsRevealRule?: DeliveryDetailsRevealRule;
   page?: number;
   pageSize?: number;
 }): Promise<ContainerQueryResult> {
@@ -1188,6 +1248,13 @@ export async function getContainers({
           ${appDateFilterColumns.pickupDate} as pickup_date,
           pc.source_pickup_date,
           pc.source_unload_date as unload_date,
+          exists (
+            select 1
+            from public.portal_warehouse_details pwd_reveal
+            where pwd_reveal.source_order_id = pc.source_order_id
+              and pwd_reveal.source_active = true
+              and pwd_reveal.source_has_actual_pallets = true
+          ) as has_source_actual_pallets,
           coalesce(pc.manual_operation_mode, pc.source_operation_mode) as operation_mode,
           coalesce(pc.manual_destination, pc.source_destination) as destination,
           coalesce(pc.manual_warehouse_points, pc.source_warehouse_points) as warehouse_points,
@@ -1329,7 +1396,7 @@ export async function getContainers({
       containers: rows(result).map((row) =>
         toContainerRecord(row, {
           showAllWarehouseAppointments,
-          restrictDeliveryDetailsUntilSourcePickup,
+          deliveryDetailsRevealRule,
         }),
       ),
       total: Number(rows(dataCountResult)[0]?.total ?? 0),
@@ -1928,7 +1995,7 @@ export async function getWarehouseAppointmentDocument({
   sourceOrderDetailId,
   sourceAppointmentLineId,
   documentType,
-  requireSourcePickup = false,
+  deliveryDetailsRevealRule = "always",
 }: {
   customerId: string;
   documentId: string;
@@ -1936,9 +2003,10 @@ export async function getWarehouseAppointmentDocument({
   sourceOrderDetailId: string;
   sourceAppointmentLineId: string;
   documentType: AppointmentDocumentType;
-  requireSourcePickup?: boolean;
+  deliveryDetailsRevealRule?: DeliveryDetailsRevealRule;
 }): Promise<AppointmentDocumentFile | null> {
   await ensureDocumentTrackingSchema();
+  await ensureContainerReleaseSchema();
 
   return withAppReadOnlyTransaction(async (client) => {
     const result = await client.query<{
@@ -1976,7 +2044,7 @@ export async function getWarehouseAppointmentDocument({
           and pwd.document_type = $5
           and pc.source_customer_id = $6
           and pc.source_active = true
-          and (not $7::boolean or pc.source_pickup_date is not null)
+          and ${deliveryDetailsAvailableSql("pc", "$7")}
         limit 1
       `,
       [
@@ -1986,7 +2054,7 @@ export async function getWarehouseAppointmentDocument({
         sourceAppointmentLineId,
         documentType,
         customerId,
-        requireSourcePickup,
+        deliveryDetailsRevealRule,
       ],
     );
     const document = rows(result)[0];
@@ -2183,14 +2251,15 @@ export async function getContainerBillDocument({
   customerId,
   documentId,
   sourceOrderId,
-  requireSourcePickup = false,
+  deliveryDetailsRevealRule = "always",
 }: {
   customerId: string;
   documentId: string;
   sourceOrderId: string;
-  requireSourcePickup?: boolean;
+  deliveryDetailsRevealRule?: DeliveryDetailsRevealRule;
 }): Promise<AppointmentDocumentFile | null> {
   await ensureDocumentTrackingSchema();
+  await ensureContainerReleaseSchema();
 
   return withAppReadOnlyTransaction(async (client) => {
     const result = await client.query<
@@ -2214,10 +2283,10 @@ export async function getContainerBillDocument({
           and pcb.source_order_id = $2
           and pc.source_customer_id = $3
           and pc.source_active = true
-          and (not $4::boolean or pc.source_pickup_date is not null)
+          and ${deliveryDetailsAvailableSql("pc", "$4")}
         limit 1
       `,
-      [documentId, sourceOrderId, customerId, requireSourcePickup],
+      [documentId, sourceOrderId, customerId, deliveryDetailsRevealRule],
     );
     const document = rows(result)[0];
 
@@ -2475,15 +2544,25 @@ function toContainerRecord(
   row: ContainerRow,
   {
     showAllWarehouseAppointments = false,
-    restrictDeliveryDetailsUntilSourcePickup = false,
+    deliveryDetailsRevealRule = "always",
   }: {
     showAllWarehouseAppointments?: boolean;
-    restrictDeliveryDetailsUntilSourcePickup?: boolean;
+    deliveryDetailsRevealRule?: DeliveryDetailsRevealRule;
   } = {},
 ): ContainerRecord {
   const sourcePickupDate = formatDate(row.source_pickup_date);
-  const deliveryDetailsRestricted =
-    restrictDeliveryDetailsUntilSourcePickup && !sourcePickupDate;
+  const sourceUnloadDate = formatDate(row.unload_date);
+  const deliveryDetailsRestricted = isDeliveryDetailsRestricted(
+    deliveryDetailsRevealRule,
+    {
+      hasSourceActualPallets: Boolean(row.has_source_actual_pallets),
+      sourcePickupDate,
+      sourceUnloadDate,
+    },
+  );
+  const deliveryDetailsRestrictionLabel = deliveryDetailsRestricted
+    ? getDeliveryDetailsRestrictionLabel(deliveryDetailsRevealRule)
+    : null;
   const appointments = (row.appointments ?? []).map(toDeliveryAppointment);
   const appointmentDocuments = buildAppointmentDocumentMap(
     row.appointment_documents ?? [],
@@ -2507,16 +2586,17 @@ function toContainerRecord(
     orderDate: deliveryDetailsRestricted ? null : formatDate(row.order_date),
     etaDate: deliveryDetailsRestricted ? null : formatDate(row.eta_date),
     lfdDate: deliveryDetailsRestricted ? null : formatDate(row.lfd_date),
-    pickupDate: restrictDeliveryDetailsUntilSourcePickup
+    pickupDate: deliveryDetailsRevealRule === "source_pickup"
       ? sourcePickupDate
       : formatDate(row.pickup_date),
     unloadDate: deliveryDetailsRestricted
       ? null
-      : formatDate(row.unload_date),
+      : sourceUnloadDate,
     deliveryDetailsRestricted,
+    deliveryDetailsRestrictionLabel,
     operationMode: deliveryDetailsRestricted ? null : row.operation_mode,
     operationModeLabel: deliveryDetailsRestricted
-      ? "提柜后开放"
+      ? deliveryDetailsRestrictionLabel ?? "暂未开放"
       : formatOperationMode(row.operation_mode),
     destination: deliveryDetailsRestricted ? null : row.destination,
     warehousePoints: deliveryDetailsRestricted ? null : row.warehouse_points,

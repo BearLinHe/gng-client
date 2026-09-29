@@ -487,6 +487,38 @@ h2 {
   gap: 8px;
 }
 
+.deliveryRevealRuleControl {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 8px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.deliveryRevealRuleControl select {
+  min-width: 210px;
+  min-height: 32px;
+  border: 1px solid #bfd3e8;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #1e3a5f;
+  font: inherit;
+  padding: 0 30px 0 10px;
+}
+
+.deliveryRevealRuleControl select:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid rgba(18, 104, 179, 0.16);
+  outline-offset: 1px;
+}
+
+.deliveryRevealRuleControl select:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
 .settingsToggle {
   display: inline-flex;
   min-height: 32px;

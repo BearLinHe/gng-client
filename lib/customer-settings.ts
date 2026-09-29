@@ -1,5 +1,11 @@
 import { rows, withAppReadOnlyTransaction, withAppTransaction } from "@/lib/db";
 
+export type DeliveryDetailsRevealRule =
+  | "source_pickup"
+  | "source_unload"
+  | "actual_pallets"
+  | "always";
+
 export type CustomerVisibilitySettings = {
   showAppointmentNumber: boolean;
   showDeliveryDate: boolean;
@@ -7,7 +13,7 @@ export type CustomerVisibilitySettings = {
   showPod: boolean;
   showBol: boolean;
   showSourceChangeNotifications: boolean;
-  revealDeliveryDetailsAfterPickup: boolean;
+  deliveryDetailsRevealRule: DeliveryDetailsRevealRule;
 };
 
 type CustomerVisibilitySettingsRow = {
@@ -17,7 +23,7 @@ type CustomerVisibilitySettingsRow = {
   showPod: boolean | null;
   showBol: boolean | null;
   showSourceChangeNotifications: boolean | null;
-  revealDeliveryDetailsAfterPickup: boolean | null;
+  deliveryDetailsRevealRule: string | null;
 };
 
 export const defaultCustomerVisibilitySettings: CustomerVisibilitySettings = {
@@ -27,7 +33,7 @@ export const defaultCustomerVisibilitySettings: CustomerVisibilitySettings = {
   showPod: true,
   showBol: true,
   showSourceChangeNotifications: true,
-  revealDeliveryDetailsAfterPickup: false,
+  deliveryDetailsRevealRule: "actual_pallets",
 };
 
 let customerSettingsSchemaPromise: Promise<void> | null = null;
@@ -37,7 +43,8 @@ async function ensureCustomerSettingsSchema() {
     await client.query(`
       alter table public.portal_customers
         add column if not exists show_source_change_notifications boolean not null default true,
-        add column if not exists reveal_delivery_details_after_pickup boolean;
+        add column if not exists reveal_delivery_details_after_pickup boolean,
+        add column if not exists delivery_details_reveal_rule text;
 
       update public.portal_customers
       set reveal_delivery_details_after_pickup =
@@ -47,6 +54,24 @@ async function ensureCustomerSettingsSchema() {
       alter table public.portal_customers
         alter column reveal_delivery_details_after_pickup set default false,
         alter column reveal_delivery_details_after_pickup set not null;
+
+      update public.portal_customers
+      set delivery_details_reveal_rule =
+        case
+          when reveal_delivery_details_after_pickup then 'source_pickup'
+          else 'actual_pallets'
+        end
+      where delivery_details_reveal_rule is null
+         or delivery_details_reveal_rule not in (
+           'source_pickup',
+           'source_unload',
+           'actual_pallets',
+           'always'
+         );
+
+      alter table public.portal_customers
+        alter column delivery_details_reveal_rule set default 'actual_pallets',
+        alter column delivery_details_reveal_rule set not null;
     `);
   }).catch((error) => {
     customerSettingsSchemaPromise = null;
@@ -71,7 +96,7 @@ export async function getCustomerVisibilitySettings(
           show_pod as "showPod",
           show_bol as "showBol",
           show_source_change_notifications as "showSourceChangeNotifications",
-          reveal_delivery_details_after_pickup as "revealDeliveryDetailsAfterPickup"
+          delivery_details_reveal_rule as "deliveryDetailsRevealRule"
         from public.portal_customers
         where source_customer_id = $1
           and source_active = true
@@ -104,7 +129,8 @@ export async function updateCustomerVisibilitySettings({
           show_pod = $5,
           show_bol = $6,
           show_source_change_notifications = $7,
-          reveal_delivery_details_after_pickup = $8,
+          delivery_details_reveal_rule = $8,
+          reveal_delivery_details_after_pickup = ($8 = 'source_pickup'),
           updated_at = now()
         where source_customer_id = $1
           and source_active = true
@@ -115,7 +141,7 @@ export async function updateCustomerVisibilitySettings({
           show_pod as "showPod",
           show_bol as "showBol",
           show_source_change_notifications as "showSourceChangeNotifications",
-          reveal_delivery_details_after_pickup as "revealDeliveryDetailsAfterPickup"
+          delivery_details_reveal_rule as "deliveryDetailsRevealRule"
       `,
       [
         customerId,
@@ -125,7 +151,7 @@ export async function updateCustomerVisibilitySettings({
         settings.showPod,
         settings.showBol,
         settings.showSourceChangeNotifications,
-        settings.revealDeliveryDetailsAfterPickup,
+        settings.deliveryDetailsRevealRule,
       ],
     );
 
@@ -152,8 +178,23 @@ export function normalizeSettings(
     showSourceChangeNotifications:
       settings.showSourceChangeNotifications ??
       defaultCustomerVisibilitySettings.showSourceChangeNotifications,
-    revealDeliveryDetailsAfterPickup:
-      settings.revealDeliveryDetailsAfterPickup ??
-      defaultCustomerVisibilitySettings.revealDeliveryDetailsAfterPickup,
+    deliveryDetailsRevealRule: normalizeDeliveryDetailsRevealRule(
+      settings.deliveryDetailsRevealRule,
+    ),
   };
+}
+
+export function normalizeDeliveryDetailsRevealRule(
+  value: unknown,
+): DeliveryDetailsRevealRule {
+  if (
+    value === "source_pickup" ||
+    value === "source_unload" ||
+    value === "actual_pallets" ||
+    value === "always"
+  ) {
+    return value;
+  }
+
+  return defaultCustomerVisibilitySettings.deliveryDetailsRevealRule;
 }
